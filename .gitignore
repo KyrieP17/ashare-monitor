@@ -1,0 +1,8 @@
+data/history/
+data/daemon.log
+data/daily_run.log
+data/daemon_state.json
+data/daemon.stop
+data/*.js
+__pycache__/
+*.pyc

@@ -1,0 +1,16 @@
+{
+  "_说明": "告警与评测阈值。改完保存，下次刷新生效。",
+  "alert": {
+    "chg_pct_abs": 4.0,
+    "volume_ratio": 2.0,
+    "main_inflow_yuan": 50000000
+  },
+  "board_score": {
+    "active_threshold": 65,
+    "neutral_threshold": 40
+  },
+  "display": {
+    "industry_top_n": 15,
+    "concept_top_n": 15
+  }
+}
