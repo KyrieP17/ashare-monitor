@@ -11,6 +11,7 @@ from common import DISCLAIMER, inject_css, load
 
 st.set_page_config(page_title="自选股监控", layout="wide", page_icon="⭐")
 inject_css()
+st.page_link("app.py", label="← 返回市场总览")
 
 M = load("latest.json")
 if not M:

@@ -9,7 +9,8 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import DISCLAIMER, inject_css, load
 
-st.set_page_config(page_title="A股盯盘 · 市场总览", layout="wide", page_icon="📈")
+st.set_page_config(page_title="A股盯盘 · 市场总览", layout="wide", page_icon="📈",
+                   initial_sidebar_state="expanded")
 inject_css()
 
 L = load("limit_up.json")
@@ -24,6 +25,13 @@ if L:
     st.caption(f'A股交易日 {L["meta"]["trade_date"]} · {L["meta"]["sentiment_note"]} · 生成于 {L["meta"]["generated_at"]}')
 if U:
     st.caption(f'美股时段：{U["meta"]["et_time"]}（{U["meta"]["us_market_state"]}）· {U["meta"]["flow_note"]}')
+
+# ---- 页面导航卡片（不依赖侧边栏）----
+nav1, nav2, nav3, nav4 = st.columns(4)
+nav1.page_link("pages/1_连板梯队.py", label="🔥 连板梯队", use_container_width=True)
+nav2.page_link("pages/2_板块资金流.py", label="💰 板块资金流", use_container_width=True)
+nav3.page_link("pages/3_美股板块.py", label="🌎 美股板块", use_container_width=True)
+nav4.page_link("pages/4_自选股监控.py", label="⭐ 自选股监控", use_container_width=True)
 
 with st.expander("体系逻辑（五层框架）", expanded=False):
     st.markdown(
