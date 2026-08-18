@@ -10,7 +10,7 @@ from common import DISCLAIMER, inject_css, load, stock_card
 
 st.set_page_config(page_title="连板梯队", layout="wide", page_icon="🔥")
 inject_css()
-st.page_link("app.py", label="← 返回市场总览")
+st.page_link("home.py", label="← 返回市场总览")
 
 L = load("limit_up.json")
 if not L:

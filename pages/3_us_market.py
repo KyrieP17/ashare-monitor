@@ -11,7 +11,7 @@ from common import DISCLAIMER, inject_css, load, us_fig
 
 st.set_page_config(page_title="美股板块", layout="wide", page_icon="🌎")
 inject_css()
-st.page_link("app.py", label="← 返回市场总览")
+st.page_link("home.py", label="← 返回市场总览")
 
 U = load("us_market.json")
 if not U:
