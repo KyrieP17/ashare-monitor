@@ -2,8 +2,10 @@ name: 每日扫盘
 
 on:
   schedule:
-    # 每交易日 15:35 北京时间 = 07:35 UTC
+    # 每交易日 15:35 北京时间（A股收盘后）= 07:35 UTC
     - cron: '35 7 * * 1-5'
+    # 每交易日 21:10 北京时间（美股盘前）= 13:10 UTC
+    - cron: '10 13 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -22,6 +24,7 @@ jobs:
         run: |
           python fetch_data.py --force
           python limit_up_scan.py
+          python us_market.py
       - name: 提交数据
         run: |
           git config user.name "github-actions[bot]"
