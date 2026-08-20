@@ -11,5 +11,6 @@ pg = st.navigation([
     st.Page("pages/2_sector_flow.py", title="板块资金流", icon="💰"),
     st.Page("pages/3_us_market.py", title="美股板块", icon="🌎"),
     st.Page("pages/4_watchlist.py", title="自选股监控", icon="⭐"),
+    st.Page("pages/5_tracker.py", title="评分有效性", icon="🎯"),
 ])
 pg.run()

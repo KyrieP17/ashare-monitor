@@ -186,6 +186,7 @@ def score_stock(x, days, bn, themes, ctx, with_kline=True):
         "float_cap_yi": round((x.get("currency_value") or 0) / 1e8, 1),
         "open_num": x.get("open_num") or 0,
         "lut_type": x.get("limit_up_type", ""),
+        "close": round(float(x.get("latest") or 0), 2),
         "first_seal": datetime.fromtimestamp(int(x["first_limit_up_time"]), BJ).strftime("%H:%M")
                       if x.get("first_limit_up_time") else "15:00",
         "theme_cnt": max((ctx["theme_counter"].get(t, 0) for t in themes), default=0),
@@ -370,6 +371,23 @@ def main():
         f.write("window.LIMIT_UP_DATA = ")
         json.dump(payload, f, ensure_ascii=False)
         f.write(";")
+
+    # ---- P0: 推荐落盘（效果追踪数据源） ----
+    rec_dir = os.path.join(DATA_DIR, "rec_history")
+    os.makedirs(rec_dir, exist_ok=True)
+    recs = [{"code": s["code"], "name": s["name"], "score": s["score"],
+             "grade": s["grade"], "boards": s["boards"], "role": s["role"],
+             "close": s["close"], "reason": s["reason"]}
+            for s in stocks if s["grade"] in ("核心观察", "等待确认")]
+    with open(os.path.join(rec_dir, f"{date}.json"), "w", encoding="utf-8") as f:
+        json.dump({"date": date, "sentiment": ctx["sentiment"], "recs": recs}, f, ensure_ascii=False)
+
+    # ---- P2: 自动入池清单 ----
+    auto = [{"code": s["code"], "name": s["name"], "score": s["score"],
+             "grade": s["grade"], "boards": s["boards"], "date": date}
+            for s in stocks if s["score"] >= 65]
+    with open(os.path.join(DATA_DIR, "auto_watch.json"), "w", encoding="utf-8") as f:
+        json.dump({"date": date, "stocks": auto}, f, ensure_ascii=False)
 
     m = payload["meta"]
     print(f"OK {date} 涨停{m['total_limit_up']} 最高{m['max_board']}板 "
