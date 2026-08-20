@@ -251,7 +251,7 @@ def check_watchlist(watch, quotes, cfg, elapsed_min, status):
             proj_vol = q["volume_hand"]
         vol_ratio = round(proj_vol / avg5, 2) if avg5 else None
 
-        rec = {**q, "avg5_vol_hand": round(avg5, 0), "vol_ratio": vol_ratio,
+        rec = {**q, "name": w["name"], "avg5_vol_hand": round(avg5, 0), "vol_ratio": vol_ratio,
                "fund_flow": flow}
         stock_alerts = []
         if abs(q["chg_pct"]) >= th["chg_pct_abs"]:
@@ -259,7 +259,7 @@ def check_watchlist(watch, quotes, cfg, elapsed_min, status):
         if vol_ratio is not None and vol_ratio >= th["volume_ratio"] and q["volume_hand"] > 0:
             stock_alerts.append(f"放量 {vol_ratio} 倍于5日均量")
         if flow and flow["main_net_wan"] * 1e4 >= th["main_inflow_yuan"]:
-            stock_alerts.append(f"主力净流入 {round(flow['main_net_wan'] / 100, 2)} 亿")
+            stock_alerts.append(f"主力净流入 {round(flow['main_net_wan'] / 10000, 2)} 亿")
         rec["alerts"] = stock_alerts
         for a in stock_alerts:
             alerts.append({"code": code, "name": name, "type": a,
@@ -285,7 +285,24 @@ def main():
     with open(os.path.join(BASE, "config.json"), encoding="utf-8") as f:
         cfg = json.load(f)
     with open(os.path.join(BASE, "watchlist.json"), encoding="utf-8") as f:
-        watch = json.load(f)["stocks"]
+        watch = list(json.load(f)["stocks"])
+    # P2: 合并体系自动入池清单（65+ 高分股），掉档（本次不在清单）自动移出
+    auto_path = os.path.join(DATA_DIR, "auto_watch.json")
+    auto_n = 0
+    if os.path.exists(auto_path):
+        try:
+            with open(auto_path, encoding="utf-8") as f:
+                auto = json.load(f)["stocks"]
+            manual_codes = {w["code"] for w in watch}
+            for a in auto:
+                code6 = a["code"]
+                full = ("sh" if code6.startswith(("6", "9")) else "sz") + code6
+                if full not in manual_codes:
+                    watch.append({"code": full, "name": a["name"] + "[体系]"})
+                    auto_n += 1
+        except Exception:
+            pass
+    META["sources"]["auto_watch"] = f"{auto_n} 只自动入池"
 
     boards_ind, boards_con, rank = [], [], []
     try:

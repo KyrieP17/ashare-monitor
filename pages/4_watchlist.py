@@ -71,7 +71,7 @@ if M:
         rows.append({"名称": w["name"], "代码": w["code"], "现价": w["price"],
                      "涨跌幅%": w["chg_pct"], "成交额(亿)": round(w["amount_wan"] / 10000, 2),
                      "量比(5日)": w["vol_ratio"],
-                     "主力净流入(亿)": round(flow["main_net_wan"] / 100, 2) if flow else None,
+                     "主力净流入(亿)": round(flow["main_net_wan"] / 10000, 2) if flow else None,
                      "换手率%": w["turnover_pct"],
                      "异动": "；".join(w["alerts"]) or "—"})
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
