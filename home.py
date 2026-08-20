@@ -52,6 +52,19 @@ if st.button("立即刷新数据（实时拉取，约1-2分钟）"):
     st.cache_data.clear()
     st.rerun()
 
+# ---- 数据新鲜度自检 ----
+from datetime import datetime as _dt
+try:
+    gen = _dt.strptime(L["meta"]["generated_at"], "%Y-%m-%d %H:%M:%S") if L else None
+    if gen:
+        age_h = (_dt.now() - gen).total_seconds() / 3600
+        if age_h <= 20:
+            st.success(f"数据心跳正常：最后更新 {L['meta']['generated_at']}（{age_h:.1f} 小时前）")
+        else:
+            st.error(f"数据超过 {age_h:.0f} 小时未更新（{L['meta']['generated_at']}）——自动扫盘可能中断，请检查 GitHub Actions 状态")
+except Exception:
+    pass
+
 # ---- 双市场指数 ----
 st.markdown("#### 市场脉搏")
 cols = st.columns(7)

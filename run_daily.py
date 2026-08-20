@@ -19,6 +19,7 @@ PIPELINE = [
     ("us_market.py", []),
     ("tracker.py", []),
     ("position_check.py", []),
+    ("send_report.py", []),
 ]
 
 
