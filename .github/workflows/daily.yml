@@ -25,10 +25,19 @@ jobs:
           python fetch_data.py --force
           python limit_up_scan.py
           python us_market.py
+          python tracker.py
+          python position_check.py
+      - name: 发送复盘邮件
+        continue-on-error: true
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python send_report.py
       - name: 提交数据
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/*.json data/pool_cache/*.json
+          git add data/*.json data/pool_cache/*.json data/rec_history/*.json
           git diff --cached --quiet || git commit -m "data: 每日扫盘 $(date -u +%Y-%m-%d)"
           git push
