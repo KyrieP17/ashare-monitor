@@ -6,3 +6,6 @@ data/daemon.stop
 data/*.js
 __pycache__/
 *.pyc
+data/thesis.db
+data/thesis.db-shm
+data/thesis.db-wal
