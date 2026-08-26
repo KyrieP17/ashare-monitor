@@ -7,9 +7,8 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common import DISCLAIMER, inject_css, load, us_fig
+from common import DISCLAIMER, inject_css, load, render_legacy_freshness, us_fig
 
-st.set_page_config(page_title="美股板块", layout="wide", page_icon="🌎")
 inject_css()
 st.page_link("home.py", label="← 返回市场总览")
 
@@ -19,10 +18,12 @@ if not U:
     st.stop()
 
 m = U["meta"]
+freshness = render_legacy_freshness(U, "data/us_market.json")
 state_zh = {"premarket": "盘前", "regular": "盘中", "afterhours": "盘后",
             "closed": "休市", "closed_weekend": "周末休市"}.get(m["us_market_state"], m["us_market_state"])
 state_cls = {"盘前": "b-pre", "盘中": "b-attack"}.get(state_zh, "b-gray")
-st.markdown(f'## 美股板块 <span class="badge {state_cls}">{state_zh}</span>', unsafe_allow_html=True)
+state_badge = "" if freshness.stale else f' <span class="badge {state_cls}">{state_zh}</span>'
+st.markdown(f'## 美股板块{state_badge}', unsafe_allow_html=True)
 st.caption(f'{m["et_time"]} · 生成于 {m["generated_at"]}（北京）· {m["flow_note"]}')
 
 cols = st.columns(3)

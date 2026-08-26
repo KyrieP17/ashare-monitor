@@ -12,5 +12,7 @@ pg = st.navigation([
     st.Page("pages/3_us_market.py", title="美股板块", icon="🌎"),
     st.Page("pages/4_watchlist.py", title="自选股监控", icon="⭐"),
     st.Page("pages/5_tracker.py", title="评分有效性", icon="🎯"),
+    st.Page("pages/6_candidates.py", title="实时候选箱", icon="📥"),
+    st.Page("pages/7_thesis.py", title="深度研究", icon="🔬"),
 ])
 pg.run()

@@ -9,3 +9,6 @@ __pycache__/
 data/thesis.db
 data/thesis.db-shm
 data/thesis.db-wal
+.venv/
+**pycache**/
+**/__pycache__/

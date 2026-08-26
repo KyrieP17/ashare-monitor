@@ -7,9 +7,8 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common import DISCLAIMER, inject_css, load
+from common import DISCLAIMER, inject_css, load, render_legacy_freshness
 
-st.set_page_config(page_title="自选股监控", layout="wide", page_icon="⭐")
 inject_css()
 
 M = load("latest.json")
@@ -17,11 +16,15 @@ P = load("positions_report.json")
 C = load("confirm.json")
 
 st.markdown("## 自选股监控")
+freshness = render_legacy_freshness(
+    M,
+    "data/latest.json；附加 data/positions_report.json、data/confirm.json",
+)
 if M:
     st.caption(f'数据时间 {M["meta"]["generated_at"]} · 阈值：涨跌幅±4% / 放量2倍 / 主力净流入5000万')
 
 # ---- 持仓区（P1）----
-st.markdown("### 持仓检查（体系卖出规则）")
+st.markdown("### 历史持仓规则记录（旧版）" if freshness.stale else "### 持仓检查（旧版规则）")
 if P and P.get("positions"):
     for r in P["positions"]:
         if r.get("error"):
@@ -42,7 +45,7 @@ else:
     st.caption("未配置真实持仓。编辑仓库 positions.json 填入 cost>0 的持仓后，此区按体系第五层卖出规则自动检查。")
 
 # ---- 次日确认区（P3）----
-st.markdown("### 次日确认（昨日高分股）")
+st.markdown("### 历史次日确认记录（旧版）" if freshness.stale else "### 次日确认（旧版规则）")
 if C and C.get("checks"):
     st.caption(f'推荐日 {C.get("rec_date_source")} · 检查更新于 {C.get("updated_at")}')
     rows = []
@@ -58,7 +61,7 @@ else:
     st.caption("无待确认推荐。确认检查在交易日 9:26（竞价）与 10:05（开盘30分钟）自动执行。")
 
 # ---- 异动告警 ----
-st.markdown("### 异动告警")
+st.markdown("### 历史异动记录" if freshness.stale else "### 异动告警（旧版规则）")
 if M:
     if M["alerts"]:
         for a in M["alerts"]:

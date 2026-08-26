@@ -1,109 +1,212 @@
 # -*- coding: utf-8 -*-
-"""主页：市场总览（情绪判定 + 双市场指数 + 今日要点 + 体系逻辑）"""
+"""主入口：CandidateCard 工作台 + 只读旧版市场看板。"""
+from __future__ import annotations
+
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import streamlit as st
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
 from common import DISCLAIMER, inject_css, load
+from thesis.candidate_repository import SQLiteCandidateRepository
+from thesis.candidates import CandidateDecision, ScanRunStatus
+from thesis.freshness import artifact_freshness
+from thesis.scan_status_ui import render_scan_status
+
 
 inject_css()
+candidate_db = ROOT / "data" / "thesis.db"
+scan_script = ROOT / "scripts" / "run_realtime_scan.py"
+is_cloud = bool(
+    os.environ.get("STREAMLIT_SHARING_MODE")
+    or os.environ.get("STREAMLIT_RUNTIME_ENV") == "cloud"
+    or os.environ.get("IS_STREAMLIT_CLOUD")
+)
+
+st.markdown("## A股 Monitor · CandidateCard 工作台")
+st.caption("CandidateCard 由确定性规则生成，不是买入建议；当前广度数据来自公开数据源。")
+st.caption(
+    "tonghuasun-agent 尚未参与候选计算；本地 LOOP 进程停止后不会继续刷新。"
+    "Streamlit Cloud 不具备本地持续扫描能力，页面存在也不代表后台扫描器正在运行。"
+)
+
+action_refresh, action_open, action_status = st.columns(3)
+refresh_clicked = action_refresh.button(
+    "刷新一次候选",
+    type="primary",
+    use_container_width=True,
+    disabled=is_cloud,
+)
+action_open.page_link("pages/6_candidates.py", label="打开候选箱", use_container_width=True)
+if action_status.button("查看扫描状态", use_container_width=True):
+    st.session_state["show_scan_details"] = not st.session_state.get("show_scan_details", False)
+if is_cloud:
+    st.info("Streamlit Cloud 只展示部署时已有数据；本地扫描入口和本地 SQLite 持久化不可用。")
+
+if refresh_clicked:
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(scan_script),
+                "--once",
+                "--database",
+                str(candidate_db),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            cwd=str(ROOT),
+        )
+    except subprocess.TimeoutExpired:
+        st.error("候选刷新超时（90 秒）；请查看扫描状态中的 RUNNING 记录是否疑似停滞。")
+    except Exception as exc:
+        st.error(f"候选刷新未启动：{type(exc).__name__}: {str(exc)[:240]}")
+    else:
+        stdout = completed.stdout.strip()
+        stderr = completed.stderr.strip()
+        with SQLiteCandidateRepository(candidate_db) as verification_repository:
+            persisted = verification_repository.latest_once_scan_run()
+        persisted_ok = bool(
+            persisted
+            and f"scan_run_id={persisted.scan_run_id}" in stdout
+            and persisted.completed_at is not None
+        )
+        if completed.returncode == 0 and persisted_ok and persisted.status in {
+            ScanRunStatus.SUCCEEDED,
+            ScanRunStatus.PARTIAL,
+        }:
+            st.success(
+                f"候选刷新完成：{persisted.status.value.upper()}，"
+                f"Observation {persisted.observation_count}，Candidate {persisted.candidate_count}。"
+            )
+        else:
+            details = " | ".join(part for part in (stdout[-600:], stderr[-600:]) if part)
+            persistence_note = "" if persisted_ok else " | 未验证到对应 ScanRun 持久化记录"
+            st.error(
+                f"候选刷新失败（返回码 {completed.returncode}）{persistence_note}："
+                f"{details or '无 stdout/stderr 摘要'}"
+            )
+
+with SQLiteCandidateRepository(candidate_db) as candidate_repository:
+    render_scan_status(
+        candidate_repository,
+        expanded=st.session_state.get("show_scan_details", False),
+    )
+    candidate_date = candidate_repository.latest_trade_date()
+    candidate_cards = candidate_repository.list(trade_date=candidate_date) if candidate_date else []
+
+visible_candidates = [card for card in candidate_cards if card.user_decision is not CandidateDecision.IGNORE]
+st.markdown("#### 候选摘要")
+if candidate_date:
+    kept = sum(card.user_decision is CandidateDecision.KEEP for card in visible_candidates)
+    promoted = sum(card.user_decision is CandidateDecision.PROMOTE for card in visible_candidates)
+    st.write(
+        f"{candidate_date.isoformat()} 候选 {len(visible_candidates)} 只 · "
+        f"KEEP {kept} · PROMOTE {promoted}"
+    )
+else:
+    st.info("尚无本地候选。请运行一次候选刷新；云端页面不代表持续扫描。")
+
+st.divider()
+st.warning(
+    "以下为旧版规则看板，仅供历史参考，不代表当前 CandidateCard 候选逻辑。"
+    "旧脚本仍保留，但已退出首页主操作入口。"
+)
 
 L = load("limit_up.json")
 M = load("latest.json")
 U = load("us_market.json")
+L_FRESH = artifact_freshness(L)
+M_FRESH = artifact_freshness(M)
 
 senti = L["meta"]["sentiment"] if L else "未知"
 senti_cls = {"进攻期": "b-attack", "分歧期": "b-split", "退潮期": "b-retreat"}.get(senti, "b-gray")
-st.markdown(f'## A股盯盘 · 小资金高弹性体系 <span class="badge {senti_cls}">{senti}</span>',
-            unsafe_allow_html=True)
+badge_text = f"数据已过期 · {senti}" if L_FRESH.stale else senti
+st.markdown(
+    f'### 旧版市场总览 <span class="badge {senti_cls}">{badge_text}</span>',
+    unsafe_allow_html=True,
+)
 if L:
-    st.caption(f'A股交易日 {L["meta"]["trade_date"]} · {L["meta"]["sentiment_note"]} · 生成于 {L["meta"]["generated_at"]}')
+    st.caption(
+        f'旧版 A 股交易日 {L["meta"]["trade_date"]} · {L["meta"]["sentiment_note"]} · '
+        f'生成于 {L["meta"]["generated_at"]}'
+    )
+if L_FRESH.stale:
+    shown_date = L_FRESH.trade_date.isoformat() if L_FRESH.trade_date else "未知"
+    st.warning(
+        f"旧版数据已过期：展示交易日 {shown_date}，最近预期有效数据日 "
+        f"{L_FRESH.expected_trade_date.isoformat()}。不得视为当前实时状态。"
+    )
 if U:
-    st.caption(f'美股时段：{U["meta"]["et_time"]}（{U["meta"]["us_market_state"]}）· {U["meta"]["flow_note"]}')
+    st.caption(f'旧版美股时段：{U["meta"]["et_time"]}（{U["meta"]["us_market_state"]}）')
 
-# ---- 页面导航卡片（不依赖侧边栏）----
-nav1, nav2, nav3, nav4 = st.columns(4)
-nav1.page_link("pages/1_ladder.py", label="🔥 连板梯队", use_container_width=True)
-nav2.page_link("pages/2_sector_flow.py", label="💰 板块资金流", use_container_width=True)
+nav1, nav2, nav3, nav4, nav5 = st.columns(5)
+nav1.page_link("pages/1_ladder.py", label="🔥 旧连板梯队", use_container_width=True)
+nav2.page_link("pages/2_sector_flow.py", label="💰 旧板块资金流", use_container_width=True)
 nav3.page_link("pages/3_us_market.py", label="🌎 美股板块", use_container_width=True)
 nav4.page_link("pages/4_watchlist.py", label="⭐ 自选股监控", use_container_width=True)
+nav5.page_link("pages/6_candidates.py", label="📥 实时候选箱", use_container_width=True)
 
-with st.expander("体系逻辑（五层框架）", expanded=False):
+with st.expander("旧版五维评分体系（仅历史参考）", expanded=False):
     st.markdown(
-        "**核心目标**：不追求每天赚钱，只找两种机会——**连板龙头**（骑乘情绪主升）与**主升启动股**（加速前进入）。\n"
-        "路径：市场情绪 → 主线板块 → 三池候选 → 角色识别 → 次日确认 → 持有主升。\n\n"
-        "**① 市场环境**：涨停家数趋势 / 炸板率 / 连板高度 / 晋级率 → 进攻期可接力，分歧期降仓，退潮期不重仓接力。\n\n"
-        "**② 三个池**：A 连板龙头（2板+、主线、辨识度）；B 主升启动（首板/突破/60日新高、MA多头，分龙头/中军/补涨）；C 炸板修复（回封、弱转强）。\n\n"
-        "**③ 五维评分**：板块环境25 + 辨识度角色25 + 趋势突破20 + 封板结构20 + 风险可交易10。"
-        "80+ 核心观察 / 65-79 等待确认 / 50-64 后排跟踪 / <50 忽略。**高分≠买入信号，只表示值得重点盯。**\n\n"
-        "**④ 次日确认才进**：连板五选二（竞价不弱 / 分歧快速收回 / 回封带动板块 / 中军同步 / 放量无抛压）；"
-        "主升（回踩突破位不破 / 回踩MA5-10转强 / 缩量调整放量突破 / 强于板块）。买「分歧后的再次转强」。\n\n"
-        "**⑤ 持仓与卖出**：30% 试错 → 40% 确认 → 30% 主升，三层确认后才单票重仓。"
-        "卖出：断板不修复 / 板块集体炸板 / 高位放量长阴 / 跌破关键位反抽失败。")
+        "此处记录旧版市场情绪、三池和五维评分逻辑，不是当前 CandidateCard 规则。"
+        "当前候选只使用自选异动、连板、普通涨停池和板块共振四类确定性规则。"
+    )
 
-if st.button("立即刷新数据（实时拉取，约1-2分钟）"):
-    with st.spinner("正在拉取最新数据…"):
-        for script, args in [("fetch_data.py", ["--force"]), ("limit_up_scan.py", []), ("us_market.py", [])]:
-            subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), script)] + args,
-                           capture_output=True, timeout=600)
-    st.cache_data.clear()
-    st.rerun()
-
-# ---- 数据新鲜度自检 ----
-from datetime import datetime as _dt
-try:
-    gen = _dt.strptime(L["meta"]["generated_at"], "%Y-%m-%d %H:%M:%S") if L else None
-    if gen:
-        age_h = (_dt.now() - gen).total_seconds() / 3600
-        if age_h <= 20:
-            st.success(f"数据心跳正常：最后更新 {L['meta']['generated_at']}（{age_h:.1f} 小时前）")
-        else:
-            st.error(f"数据超过 {age_h:.0f} 小时未更新（{L['meta']['generated_at']}）——自动扫盘可能中断，请检查 GitHub Actions 状态")
-except Exception:
-    pass
-
-# ---- 双市场指数 ----
-st.markdown("#### 市场脉搏")
+st.markdown("#### 旧版市场脉搏")
 cols = st.columns(7)
 if L:
-    m = L["meta"]
-    cols[0].metric("涨停家数", m["total_limit_up"], f'昨日 {m["prev_total"] or "—"}')
-    cols[1].metric("晋级率", f'{m["promo_rate_pct"]}%' if m["promo_rate_pct"] is not None else "—")
-    cols[2].metric("开板率", f'{m["open_ratio_pct"]}%')
-    cols[3].metric("空间板", f'{m["max_board"]} 板')
+    market = L["meta"]
+    cols[0].metric("涨停家数", market["total_limit_up"], f'前值 {market["prev_total"] or "—"}')
+    cols[1].metric("晋级率", f'{market["promo_rate_pct"]}%' if market["promo_rate_pct"] is not None else "—")
+    cols[2].metric("开板率", f'{market["open_ratio_pct"]}%')
+    cols[3].metric("空间板", f'{market["max_board"]} 板')
 if M:
-    idx_cols = st.columns(3)
-    for i, c in enumerate(["sh000001", "sz399001", "sz399006"]):
-        q = M["indices"].get(c)
-        if q:
-            idx_cols[i].metric(q["name"] + "（A股）", f'{q["price"]:.2f}', f'{q["chg_pct"]:+.2f}%')
+    index_columns = st.columns(3)
+    for index, code in enumerate(["sh000001", "sz399001", "sz399006"]):
+        quote = M["indices"].get(code)
+        if quote:
+            index_columns[index].metric(quote["name"] + "（旧版数据）", f'{quote["price"]:.2f}', f'{quote["chg_pct"]:+.2f}%')
 if U:
-    us_cols = st.columns(3)
-    for i, idx in enumerate(U["indices"]):
-        us_cols[i].metric(idx["name"] + "（美股）", f'{idx["price"]:.2f}', f'{idx["chg_pct"]:+.2f}%')
+    us_columns = st.columns(3)
+    for index, item in enumerate(U["indices"]):
+        us_columns[index].metric(item["name"] + "（美股）", f'{item["price"]:.2f}', f'{item["chg_pct"]:+.2f}%')
 
-# ---- 今日要点 ----
-st.markdown("#### 今日要点")
-c1, c2 = st.columns(2)
-with c1:
+st.markdown("#### 旧版数据要点")
+left, right = st.columns(2)
+with left:
     if L:
-        core = [s for s in L["pool_a_leaders"] if s["grade"] == "核心观察"]
-        if core:
-            st.error("**核心观察（80+）**：" + "；".join(
-                f'{s["name"]}({s["code"]}) {s["boards"]}板 {s["score"]}分' for s in core))
+        legacy_core = [item for item in L["pool_a_leaders"] if item["grade"] == "核心观察"]
+        if legacy_core:
+            st.info(
+                "**旧版核心观察（历史评分输出）**："
+                + "；".join(
+                    f'{item["name"]}({item["code"]}) {item["boards"]}板 {item["score"]}分'
+                    for item in legacy_core
+                )
+            )
         else:
-            st.info("本日无 80+ 核心观察标的（分歧期/退潮期宁缺毋滥）")
-        st.caption("连板梯队详情见左侧导航「连板梯队」页")
-with c2:
+            st.caption("旧版数据中无 80+ 评分记录。")
+with right:
     if M:
-        b_in = M["boards_industry"][0] if M["boards_industry"] else None
-        b_out = M["boards_industry"][-1] if M["boards_industry"] else None
-        if b_in and b_out:
-            st.success(f'**资金主攻**：{b_in["name"]} +{b_in["net_yi"]}亿　|　'
-                       f'**资金撤退**：{b_out["name"]} {b_out["net_yi"]}亿')
-        st.caption("板块资金流详情见左侧导航「板块资金流」页")
+        inflow = M["boards_industry"][0] if M["boards_industry"] else None
+        outflow = M["boards_industry"][-1] if M["boards_industry"] else None
+        if inflow and outflow:
+            st.info(
+                f'旧版资金记录：{inflow["name"]} {inflow["net_yi"]:+} 亿；'
+                f'{outflow["name"]} {outflow["net_yi"]:+} 亿'
+            )
+
+if M_FRESH.stale:
+    st.caption("旧版板块与自选数据同样已过期；页面不会自动把它解释为当前候选信号。")
 
 st.markdown(DISCLAIMER, unsafe_allow_html=True)

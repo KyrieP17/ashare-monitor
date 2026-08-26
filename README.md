@@ -1,18 +1,35 @@
-# A股盯盘 · 小资金高弹性体系
+# AShare Monitor · CandidateCard 候选工作台
 
-公开访问的 A 股短线盯盘看板：连板梯队（含 5 日分数轨迹）+ 板块资金流 + 三池选股。
+面向个人研究流程的 A 股候选工作台：公开市场数据负责广度发现，确定性规则生成 CandidateCard，用户再选择 KEEP / IGNORE / PROMOTE。
 
-## 体系概要
+## 当前主流程
 
-市场情绪 → 主线板块 → 三池候选（连板龙头 / 主升启动 / 炸板修复）→ 角色识别 → 次日确认 → 持有主升。
-五维评分：板块环境 25 + 辨识度角色 25 + 趋势突破 20 + 封板结构 20 + 风险可交易 10。
-80+ 核心观察 / 65-79 等待确认 / 50-64 后排跟踪 / <50 忽略。高分≠买入信号。
+```text
+公开市场数据 → 确定性候选扫描 → CandidateCard → KEEP / IGNORE / PROMOTE → ThesisCard
+```
+
+候选由确定性规则产生，不是 AI 研究结论，也不构成投资建议。首页中的旧版连板、情绪和五维评分内容已降级为历史参考，不代表当前 CandidateCard 逻辑。
+
+`research_pool.json` 保存用户明确指定的研究股票。研究池固定优先进入最多 10 张的 CandidateCard 候选箱，剩余位置继续由自选异动、连板、普通涨停和板块共振规则补足；研究池身份只表示“用户希望研究”，不表示市场信号或推荐。
 
 ## 数据与更新
 
 - 数据源：同花顺涨停池、新浪财经 MoneyFlow、腾讯财经行情（均为公开接口）
-- 更新：GitHub Actions 每交易日 15:35（北京时间）自动扫盘并提交 `data/*.json`；页面支持手动实时刷新
-- 本地运行：`streamlit run app.py`
+- 日级公开数据：GitHub Actions 每交易日 15:35（北京时间）运行旧收盘流程并提交 `data/*.json`
+- 本地候选扫描：`.\.venv\Scripts\python.exe scripts/run_realtime_scan.py --once`
+- 盘中循环扫描：`.\.venv\Scripts\python.exe scripts/run_realtime_scan.py --loop --interval-minutes 4`
+- 页面启动：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_local_app.ps1`
+- 完整测试：`.\.venv\Scripts\python.exe -m pytest -q`
+
+项目依赖只保证安装在仓库 `.venv`；不要使用裸 `python`、裸 `streamlit` 或全局 Anaconda 运行项目与测试。
+
+分钟扫描使用独立、无副作用的公开数据客户端和确定性规则，不调用旧荐股脚本、LLM 或同花顺本地账户接口。候选和每轮 `ScanRun` 审计记录保存在本地 `data/thesis.db`，与 ThesisCard 共用同一个工作台数据文件，但来源 Observation 保持隔离；不同来源冲突时标记 `CONFLICTED`，不会静默覆盖。
+
+候选页可按需调用 `get_price_volume_context`，读取腾讯公开端点的 5/10 日前复权 OHLCV，计算收益、完整日成交量相对前 5 日均量、距 10 日最高价和 10 日最大收盘回撤。该调用只在用户点击“查看价格行为”时发生，不会随分钟扫描批量抓取。公开端点当前不提供 amount/turnover 时保持缺失，不填零。
+
+`--once` 只代表一次手动刷新；`--loop` 才代表持续扫描。页面会分别显示最新单次运行与 LOOP 健康状态。打开 Streamlit 页面本身不会启动后台扫描；盘中若超过实际 LOOP 间隔的两倍没有新运行，页面会提示持续扫描可能已经停止。
+
+Streamlit Cloud 不运行本地分钟扫描，也没有本地 SQLite 持久化保证。云端页面只展示部署时已有的公开数据或演示内容，不代表持续实时模式。
 
 ## 免责声明
 

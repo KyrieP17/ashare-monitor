@@ -6,9 +6,8 @@ import sys
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common import DISCLAIMER, inject_css, load, stock_card
+from common import DISCLAIMER, inject_css, load, render_legacy_freshness, stock_card
 
-st.set_page_config(page_title="连板梯队", layout="wide", page_icon="🔥")
 inject_css()
 st.page_link("home.py", label="← 返回市场总览")
 
@@ -18,8 +17,10 @@ if not L:
     st.stop()
 
 m = L["meta"]
+freshness = render_legacy_freshness(L, "data/limit_up.json")
 senti_cls = {"进攻期": "b-attack", "分歧期": "b-split", "退潮期": "b-retreat"}.get(m["sentiment"], "b-gray")
-st.markdown(f'## 连板梯队 <span class="badge {senti_cls}">{m["sentiment"]}</span>', unsafe_allow_html=True)
+sentiment_badge = "" if freshness.stale else f' <span class="badge {senti_cls}">{m["sentiment"]}</span>'
+st.markdown(f'## 连板梯队{sentiment_badge}', unsafe_allow_html=True)
 st.caption(f'交易日 {m["trade_date"]} · {m["sentiment_note"]} · 生成于 {m["generated_at"]}')
 
 c1, c2, c3, c4 = st.columns(4)
@@ -29,7 +30,10 @@ c3.metric("开板率", f'{m["open_ratio_pct"]}%')
 c4.metric("空间板", f'{m["max_board"]} 板', f'昨日 {m["prev_max_board"] or "—"} 板')
 
 st.markdown("**主线题材**：" + "　".join(f'{t[0]}×{t[1]}' for t in m["themes_top"][:8]))
-st.caption("卡片底部柱条 = 近5个交易日分数轨迹（黑框为当日）；一字板不评分（无买点）")
+if freshness.stale:
+    st.warning("旧版评分、角色和轨迹默认停用；下方仅保留历史板数、价格、题材与封板事实。")
+else:
+    st.caption("旧版分数轨迹仅针对上述交易日；不构成当前研究结论。")
 st.divider()
 
 for b in range(m["max_board"], 0, -1):
@@ -46,6 +50,9 @@ for b in range(m["max_board"], 0, -1):
     cols = st.columns(3)
     for i, s in enumerate(visible):
         with cols[i % 3]:
-            st.markdown(stock_card(s), unsafe_allow_html=True)
+            st.markdown(
+                stock_card(s, trade_date=m["trade_date"], stale=freshness.stale),
+                unsafe_allow_html=True,
+            )
 
 st.markdown(DISCLAIMER, unsafe_allow_html=True)

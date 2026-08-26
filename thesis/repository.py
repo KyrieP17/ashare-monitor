@@ -438,6 +438,12 @@ class SQLiteThesisRepository:
         ).fetchall()
         return [ThesisCard.model_validate_json(row["payload"]) for row in rows]
 
+    def list_cards(self) -> list[ThesisCard]:
+        rows = self._connection.execute(
+            "SELECT payload FROM thesis_cards ORDER BY rowid DESC"
+        ).fetchall()
+        return [ThesisCard.model_validate_json(row["payload"]) for row in rows]
+
     def find_active_card_by_instrument(self, instrument_id: str) -> ThesisCard | None:
         row = self._connection.execute(
             """SELECT payload FROM thesis_cards

@@ -6,6 +6,8 @@ import os
 import plotly.graph_objects as go
 import streamlit as st
 
+from thesis.freshness import ArtifactFreshness, artifact_freshness
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(BASE, "data")
 
@@ -28,6 +30,10 @@ CSS = """
 .tier-h{font-size:13px;font-weight:600;color:#8a8f99;margin:10px 0 6px}
 .disc{font-size:12px;color:#a0a4ab;line-height:1.7;background:#fafbfc;border-radius:8px;padding:12px 16px;margin-top:20px}
 .up{color:#d43c3c}.down{color:#1a9e5c}
+.legacy-note{display:inline-block;padding:3px 9px;border-radius:8px;background:#eceff3;color:#61666f;font-size:12px;font-weight:600}
+.candidate-tags{margin:4px 0 8px}.candidate-tag{display:inline-block;padding:2px 7px;margin:0 5px 4px 0;border-radius:8px;background:#eef2f6;color:#4e5969;font-size:11px}
+.candidate-tag.focus{background:#fdecec;color:#b53838}.candidate-code{color:#8a8f99;font-size:12px;font-weight:500}
+.candidate-decision{display:inline-block;padding:2px 7px;border-radius:8px;background:#f1f3f5;color:#646a73;font-size:11px}
 </style>
 """
 
@@ -81,17 +87,43 @@ def traj_html(hist, cur):
     return h
 
 
-def stock_card(s, show_traj=True):
-    risks = f'<div class="rsn" style="color:#1a7a46">风险：{esc("；".join(s["risks"]))}</div>' if s["risks"] else ""
+def stock_card(s, show_traj=True, *, trade_date=None, stale=False):
+    date_line = f'<div class="rsn">对应交易日：{esc(trade_date)}</div>' if trade_date else ""
+    if stale:
+        return (f'<div class="stk"><div class="nm">{esc(s["name"])}<span class="code">{s["code"]}</span></div>'
+                f'{date_line}<div class="rsn">{esc(s["reason"])}</div>'
+                f'<div class="rsn">{s["boards"]}板 · 封单{s["seal_yi"]}亿 · 换手{s["turnover_pct"]}% · {esc(s["lut_type"])}</div>'
+                '<div class="rsn" style="color:#8a8f99">旧版风险结论已停用；以下仅为对应历史交易日记录。</div></div>')
+    risks = (f'<div class="rsn" style="color:#6b7078">旧规则注意项（仅针对该交易日）：'
+             f'{esc("；".join(s["risks"]))}</div>') if s["risks"] else ""
     promoted = ' · <span class="up">晋级</span>' if s.get("promoted") else ""
     traj = traj_html(s.get("score_history"), s["score"]) if show_traj else ""
     return (f'<div class="stk"><div class="nm">{esc(s["name"])}<span class="code">{s["code"]}</span>'
             f'<span class="role {ROLE_CLS.get(s["role"], "r-follow")}">{s["role"]}</span>'
             f'<span class="sc {sc_cls(s["score"])}">{s["score"]}分</span></div>'
-            f'<div class="rsn">{esc(s["reason"])}</div>'
+            f'{date_line}<div class="rsn">{esc(s["reason"])}</div>'
             f'<div class="rsn">封单{s["seal_yi"]}亿 · 换手{s["turnover_pct"]}% · {esc(s["lut_type"])}'
             f'{" · " + s["first_seal"] if s["first_seal"] != "15:00" else ""}{promoted}</div>'
             f'{risks}{traj}</div>')
+
+
+def render_legacy_freshness(payload, source: str) -> ArtifactFreshness:
+    freshness = artifact_freshness(payload)
+    trade_date = freshness.trade_date.isoformat() if freshness.trade_date else "未知"
+    generated_at = (
+        freshness.generated_at.strftime("%Y-%m-%d %H:%M:%S")
+        if freshness.generated_at else "未知"
+    )
+    st.markdown('<span class="legacy-note">旧版规则看板</span>', unsafe_allow_html=True)
+    st.caption(
+        f"数据交易日：{trade_date} · 数据生成时间：{generated_at} · "
+        f"是否过期：{'是' if freshness.stale else '否'} · 数据来源：{source}"
+    )
+    if freshness.stale:
+        st.error("当前展示的是历史数据，不代表今日市场状态。")
+    else:
+        st.info("旧版规则内容仅对应所示交易日，不代表模型研究结论。")
+    return freshness
 
 
 def flow_fig(boards, top_n, title):

@@ -7,14 +7,14 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common import DISCLAIMER, inject_css, load
+from common import DISCLAIMER, inject_css, load, render_legacy_freshness
 
-st.set_page_config(page_title="评分有效性", layout="wide", page_icon="🎯")
 inject_css()
 
 T = load("tracker.json")
 st.markdown("## 评分有效性追踪")
-st.caption("每日 65+ 推荐自动落盘，T+1/T+3/T+5 收益到期自动回填——体系好不好，用数据说话")
+freshness = render_legacy_freshness(T, "data/tracker.json")
+st.caption("旧版评分追踪历史档案；不再作为当前 CandidateCard 体系的有效性结论。")
 
 if not T or not T.get("details"):
     st.info("追踪数据从 2026-08-20 起积累，首批 T+1 收益将在下一交易日回填。跑满一个月后这里有分档胜率、平均收益与明细。")

@@ -7,9 +7,9 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common import DISCLAIMER, esc, flow_fig, inject_css, load
+from common import DISCLAIMER, esc, flow_fig, inject_css, load, render_legacy_freshness
+from thesis.freshness import artifact_freshness
 
-st.set_page_config(page_title="板块资金流", layout="wide", page_icon="💰")
 inject_css()
 st.page_link("home.py", label="← 返回市场总览")
 
@@ -20,6 +20,7 @@ if not M:
     st.stop()
 
 st.markdown("## 板块资金流")
+freshness = render_legacy_freshness(M, "data/latest.json；附加历史池 data/limit_up.json")
 st.caption(f'数据时间 {M["meta"]["generated_at"]} · 来源：新浪财经 MoneyFlow · 红流入/绿流出')
 
 tab1, tab2 = st.tabs(["行业板块", "概念板块"])
@@ -31,48 +32,52 @@ with tab2:
                     use_container_width=True)
 
 if L:
+    limit_freshness = artifact_freshness(L)
     st.divider()
-    st.markdown("#### B 池 · 主升启动（首板/突破结构，评分≥50）")
-    if L["pool_b_starters"]:
-        rows = []
-        for s in L["pool_b_starters"]:
-            k = s.get("kline") or {}
-            trend = []
-            if k.get("new_high_60d"):
-                trend.append("60日新高")
-            if k.get("ma_bull"):
-                trend.append("MA20>MA60")
-            elif k.get("ma20_up"):
-                trend.append("MA20向上")
-            rows.append({"评分": s["score"], "名称": s["name"], "代码": s["code"], "角色": s["role"],
-                         "涨停原因": s["reason"], "趋势结构": " · ".join(trend) or "—",
-                         "封单(亿)": s["seal_yi"], "换手%": s["turnover_pct"],
-                         "首封": s["first_seal"], "流通市值(亿)": s["float_cap_yi"],
-                         "风险": "；".join(s["risks"]) or "—"})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.caption("本日无评分≥50的首板")
+    if limit_freshness.stale:
+        st.warning("旧版风险结论与评分已停用；以下仅保留对应历史交易日的池内事实。")
+    with st.expander("旧版 B/C 池历史记录（默认收起）"):
+        st.caption(f'对应交易日：{L["meta"]["trade_date"]}')
+        st.markdown("#### B 池历史记录")
+        if L["pool_b_starters"]:
+            rows = [{"名称": s["name"], "代码": s["code"], "板数": s["boards"],
+                     "涨停原因": s["reason"], "封单(亿)": s["seal_yi"],
+                     "换手%": s["turnover_pct"], "首封": s["first_seal"]}
+                    for s in L["pool_b_starters"]]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("该历史交易日无 B 池记录")
 
-    st.markdown("#### C 池 · 炸板修复（开板后回封，高风险高弹性）")
-    if L["pool_c_repair"]:
-        rows = [{"评分": s["score"], "名称": s["name"], "代码": s["code"], "板数": s["boards"],
-                 "涨停原因": s["reason"], "开板次数": s["open_num"], "封单(亿)": s["seal_yi"],
-                 "换手%": s["turnover_pct"], "风险": "；".join(s["risks"]) or "—"}
-                for s in L["pool_c_repair"][:15]]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.caption("本日无回封个股")
+        st.markdown("#### C 池历史记录")
+        if L["pool_c_repair"]:
+            rows = [{"名称": s["name"], "代码": s["code"], "板数": s["boards"],
+                     "涨停原因": s["reason"], "开板次数": s["open_num"],
+                     "封单(亿)": s["seal_yi"], "换手%": s["turnover_pct"]}
+                    for s in L["pool_c_repair"][:15]]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("该历史交易日无 C 池记录")
+
+    if not limit_freshness.stale and L["pool_b_starters"]:
+        with st.expander("旧版评分与注意项（仅针对该交易日）"):
+            st.caption("旧规则注意项（仅针对该交易日），不代表模型研究结论。")
+            rows = []
+            for s in L["pool_b_starters"]:
+                rows.append({"历史评分": s["score"], "名称": s["name"], "代码": s["code"],
+                             "旧角色": s["role"], "旧规则注意项（仅针对该交易日）": "；".join(s["risks"]) or "—"})
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 st.divider()
-st.markdown("#### 板块评测（辅助发现工具）")
-th1 = M["config"]["board_score"]["active_threshold"]
-th2 = M["config"]["board_score"]["neutral_threshold"]
-rows = []
-for i, bs in enumerate(M["boards_industry"][:20]):
-    rating = "积极关注" if bs["score"] >= th1 else ("中性观察" if bs["score"] >= th2 else "谨慎回避")
-    rows.append({"排名": i + 1, "板块": bs["name"], "评分": bs["score"], "评级": rating,
-                 "主力净流入(亿)": bs["net_yi"], "涨跌幅%": bs["chg_pct"],
-                 "领涨股": f'{bs["lead_stock"]} {bs["lead_chg_pct"]}%', "评分依据": bs["reason"]})
-st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+with st.expander("旧版板块评分（历史记录，默认收起）"):
+    st.caption("仅对应上方数据交易日，不代表今日结论。")
+    th1 = M["config"]["board_score"]["active_threshold"]
+    th2 = M["config"]["board_score"]["neutral_threshold"]
+    rows = []
+    for i, bs in enumerate(M["boards_industry"][:20]):
+        rating = "积极关注" if bs["score"] >= th1 else ("中性观察" if bs["score"] >= th2 else "谨慎回避")
+        rows.append({"排名": i + 1, "板块": bs["name"], "历史评分": bs["score"], "旧规则评级": rating,
+                     "主力净流入(亿)": bs["net_yi"], "涨跌幅%": bs["chg_pct"],
+                     "领涨股": f'{bs["lead_stock"]} {bs["lead_chg_pct"]}%', "旧评分依据": bs["reason"]})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 st.markdown(DISCLAIMER, unsafe_allow_html=True)
