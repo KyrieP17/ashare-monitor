@@ -17,7 +17,11 @@ from common import DISCLAIMER, inject_css, load
 from thesis.candidate_repository import SQLiteCandidateRepository
 from thesis.candidates import CandidateDecision, ScanRunStatus
 from thesis.freshness import artifact_freshness
-from thesis.market_environment_report import MarketEnvironmentReport, build_market_environment_report
+from thesis.market_environment_report import (
+    MarketEnvironmentReport,
+    build_market_environment_from_legacy,
+    build_market_environment_report,
+)
 from thesis.scan_status_ui import render_scan_status
 
 
@@ -77,7 +81,12 @@ def _render_market_environment(report: MarketEnvironmentReport, *, stale: bool) 
         if report.stats.average_open_num is not None
         else "数据不足",
     )
-    fourth.metric("板块共振候选", report.stats.sector_resonance_count)
+    fourth.metric(
+        "板块共振候选",
+        report.stats.sector_resonance_count
+        if report.stats.sector_resonance_count is not None
+        else "数据不足",
+    )
 
     left, right = st.columns(2)
     with left:
@@ -185,10 +194,18 @@ with SQLiteCandidateRepository(candidate_db) as candidate_repository:
     )
     market_environment = build_market_environment_report(all_candidate_cards)
 
-if market_environment is None:
-    market_environment_payload = load("market_environment.json")
-    if market_environment_payload:
-        market_environment = MarketEnvironmentReport.model_validate(market_environment_payload)
+legacy_limit_up = load("limit_up.json")
+legacy_market_environment = build_market_environment_from_legacy(legacy_limit_up)
+available_environment_reports = [
+    report
+    for report in (market_environment, legacy_market_environment)
+    if report is not None
+]
+market_environment = (
+    max(available_environment_reports, key=lambda report: report.trade_date)
+    if available_environment_reports
+    else None
+)
 
 visible_candidates = [card for card in candidate_cards if card.user_decision is not CandidateDecision.IGNORE]
 st.markdown("#### 候选摘要")
@@ -217,7 +234,7 @@ st.warning(
     "旧脚本仍保留，但已退出首页主操作入口。"
 )
 
-L = load("limit_up.json")
+L = legacy_limit_up
 M = load("latest.json")
 U = load("us_market.json")
 L_FRESH = artifact_freshness(L)

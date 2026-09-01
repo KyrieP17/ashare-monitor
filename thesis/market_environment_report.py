@@ -23,10 +23,13 @@ class MarketEnvironmentStats(DomainModel):
     total_limit_up_change_pct: float | None = None
     selected_limit_up_count: int = Field(ge=0)
     selected_max_board: int | None = Field(default=None, ge=1)
+    previous_selected_max_board: int | None = Field(default=None, ge=1)
     known_open_count: int = Field(ge=0)
     average_open_num: float | None = Field(default=None, ge=0)
+    open_ratio_pct: float | None = Field(default=None, ge=0)
+    promotion_rate_pct: float | None = Field(default=None, ge=0)
     high_divergence_count: int = Field(ge=0)
-    sector_resonance_count: int = Field(ge=0)
+    sector_resonance_count: int | None = Field(default=None, ge=0)
 
 
 class MarketEnvironmentScenario(DomainModel):
@@ -72,12 +75,14 @@ def build_market_environment_report(
     current_stats = _stats(current)
     previous_stats = _stats(previous)
     total_change = _pct_change(current_stats["total_limit_up"], previous_stats["total_limit_up"])
+    previous_max = max(previous_stats["boards"], default=None)
     stats = MarketEnvironmentStats(
         total_limit_up=current_stats["total_limit_up"],
         previous_total_limit_up=previous_stats["total_limit_up"],
         total_limit_up_change_pct=total_change,
         selected_limit_up_count=len(current_stats["boards"]),
         selected_max_board=max(current_stats["boards"], default=None),
+        previous_selected_max_board=previous_max,
         known_open_count=len(current_stats["opens"]),
         average_open_num=(mean(current_stats["opens"]) if current_stats["opens"] else None),
         high_divergence_count=sum(value >= 3 for value in current_stats["opens"]),
@@ -85,7 +90,6 @@ def build_market_environment_report(
             "SECTOR_RESONANCE" in candidate.trigger_rules for candidate in current
         ),
     )
-    previous_max = max(previous_stats["boards"], default=None)
     previous_average_open = mean(previous_stats["opens"]) if previous_stats["opens"] else None
     regime = _classify_regime(stats, previous_max)
     confidence = (
@@ -150,6 +154,110 @@ def build_market_environment_report(
     )
 
 
+def build_market_environment_from_legacy(
+    payload: dict[str, object] | None,
+) -> MarketEnvironmentReport | None:
+    """Turn the daily committed limit-up artifact into the same bounded report contract."""
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("meta"), dict):
+        return None
+    meta = payload["meta"]
+    trade_date = _legacy_date(meta.get("trade_date"))
+    if trade_date is None:
+        return None
+    previous_date = _legacy_date(meta.get("prev_date"))
+    total = _legacy_int(meta.get("total_limit_up"))
+    previous_total = _legacy_int(meta.get("prev_total"))
+    max_board = _legacy_int(meta.get("max_board"))
+    previous_max = _legacy_int(meta.get("prev_max_board"))
+    open_ratio = _legacy_float(meta.get("open_ratio_pct"))
+    promotion_rate = _legacy_float(meta.get("promo_rate_pct"))
+    change = _pct_change(total, previous_total)
+    regime = {
+        "进攻期": MarketRegime.ATTACK,
+        "分歧期": MarketRegime.DIVERGENCE,
+        "退潮期": MarketRegime.RETREAT,
+    }.get(str(meta.get("sentiment") or ""), MarketRegime.UNKNOWN)
+    stats = MarketEnvironmentStats(
+        total_limit_up=total,
+        previous_total_limit_up=previous_total,
+        total_limit_up_change_pct=change,
+        selected_limit_up_count=0,
+        selected_max_board=max_board,
+        previous_selected_max_board=previous_max,
+        known_open_count=0,
+        open_ratio_pct=open_ratio,
+        promotion_rate_pct=promotion_rate,
+        high_divergence_count=0,
+        sector_resonance_count=None,
+    )
+    evidence: list[str] = []
+    if total is not None:
+        text = f"每日涨停池记录为 {total} 只"
+        if previous_total is not None and change is not None:
+            text += f"，前一交易日 {previous_total} 只，变化 {change:+.1f}%"
+        evidence.append(text + "。")
+    if max_board is not None:
+        text = f"空间高度 {max_board} 板"
+        if previous_max is not None:
+            text += f"，前一交易日 {previous_max} 板"
+        evidence.append(text + "。")
+    if open_ratio is not None:
+        evidence.append(f"全量扫描记录的开板率为 {open_ratio:.1f}%。")
+    if promotion_rate is not None:
+        evidence.append(f"旧版昨日连板集合口径的晋级率为 {promotion_rate:.1f}%。")
+
+    structure: list[str] = []
+    if change is not None:
+        structure.append(f"涨停宽度环比 {change:+.1f}%，宽度本身{'扩张' if change > 0 else '收缩'}。")
+    if max_board is not None and previous_max is not None:
+        structure.append(
+            f"空间高度由 {previous_max} 板降至 {max_board} 板，最高辨识度标的没有与宽度同步增强。"
+            if max_board < previous_max
+            else f"空间高度由 {previous_max} 板升至 {max_board} 板。"
+        )
+    themes = meta.get("themes_top")
+    if isinstance(themes, list):
+        normalized_themes = [
+            f"{item[0]}×{item[1]}"
+            for item in themes[:5]
+            if isinstance(item, list) and len(item) >= 2
+        ]
+        if normalized_themes:
+            structure.append("题材集中度观察：" + "、".join(normalized_themes) + "。")
+
+    risks: list[str] = []
+    if open_ratio is not None and open_ratio >= 40:
+        risks.append(f"开板率 {open_ratio:.1f}% 偏高，封板成功率与日内承接存在明显压力。")
+    if max_board is not None and previous_max is not None and max_board < previous_max:
+        risks.append("空间高度下降，说明高位接力的容错率没有随涨停家数回升。")
+    if promotion_rate is not None and promotion_rate < 50:
+        risks.append(f"晋级率 {promotion_rate:.1f}% 未过半，连板延续仍不稳定。")
+
+    return MarketEnvironmentReport(
+        trade_date=trade_date,
+        previous_trade_date=previous_date,
+        regime=regime,
+        confidence=EnvironmentConfidence.MEDIUM,
+        headline=(
+            "涨停宽度回升，但空间高度下降且开板压力偏高，赚钱效应仍然脆弱。"
+            if regime is MarketRegime.RETREAT
+            else _headline(regime)
+        ),
+        stats=stats,
+        evidence=evidence,
+        structure_read=structure,
+        risk_signals=risks,
+        scenarios=_scenarios(),
+        limitations=[
+            "该报告使用每日提交的 legacy limit_up.json；市场统计较完整，但旧版角色、分数和荐股结论没有被复用。",
+            "开板率与晋级率沿用历史扫描器口径，尚未迁移为 Candidate Observation 级审计字段。",
+            "未读取账户、席位明细或券商交易接口，不能确认特定游资或主力意图。",
+            "该报告只用于研究环境分层，不生成仓位、买点、买卖或下单指令。",
+        ],
+    )
+
+
 def _stats(candidates: list[CandidateCard]) -> dict[str, object]:
     total_limit_up: int | None = None
     boards: list[int] = []
@@ -174,6 +282,34 @@ def _pct_change(current: object, previous: object) -> float | None:
     if not isinstance(current, int) or not isinstance(previous, int) or previous == 0:
         return None
     return (current - previous) / previous * 100
+
+
+def _legacy_date(value: object) -> date | None:
+    text = str(value or "").strip()
+    if len(text) == 8 and text.isdigit():
+        text = f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _legacy_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _legacy_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _classify_regime(stats: MarketEnvironmentStats, previous_max: int | None) -> MarketRegime:

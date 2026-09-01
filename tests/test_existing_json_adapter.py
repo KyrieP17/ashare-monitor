@@ -22,8 +22,8 @@ def metric_by_key(metrics, key):
     return next(metric for metric in metrics if metric.metric_key == key)
 
 
-def test_real_json_repeated_parse_has_stable_non_colliding_observation_refs():
-    adapter = ExistingJsonAdapter(DATA_DIR)
+def test_real_json_repeated_parse_has_stable_non_colliding_observation_refs(historical_data_dir):
+    adapter = ExistingJsonAdapter(historical_data_dir)
     instrument = normalize_symbol("sh600519")
 
     first = adapter.get_market_snapshot(TRADE_DAY, [instrument])
@@ -39,8 +39,8 @@ def test_real_json_repeated_parse_has_stable_non_colliding_observation_refs():
     assert first.snapshot_id == second.snapshot_id
 
 
-def test_latest_json_uses_quote_date_and_converts_wan_to_cny():
-    snapshot = ExistingJsonAdapter(DATA_DIR).get_market_snapshot(
+def test_latest_json_uses_quote_date_and_converts_wan_to_cny(historical_data_dir):
+    snapshot = ExistingJsonAdapter(historical_data_dir).get_market_snapshot(
         TRADE_DAY,
         [normalize_symbol("sh600519")],
     )
@@ -56,8 +56,8 @@ def test_latest_json_uses_quote_date_and_converts_wan_to_cny():
     assert validate_snapshot_provenance(snapshot).is_valid
 
 
-def test_limit_up_json_converts_yi_to_cny_without_renaming_only():
-    snapshot = ExistingJsonAdapter(DATA_DIR).get_market_snapshot(
+def test_limit_up_json_converts_yi_to_cny_without_renaming_only(historical_data_dir):
+    snapshot = ExistingJsonAdapter(historical_data_dir).get_market_snapshot(
         TRADE_DAY,
         [normalize_symbol("603958")],
     )
@@ -71,8 +71,8 @@ def test_limit_up_json_converts_yi_to_cny_without_renaming_only():
     assert seal_amount.raw_reference == "limit_pool[code=603958].seal_yi"
 
 
-def test_historical_pool_replay_does_not_use_future_latest_json():
-    snapshot = ExistingJsonAdapter(DATA_DIR).get_market_snapshot(
+def test_historical_pool_replay_does_not_use_future_latest_json(historical_data_dir):
+    snapshot = ExistingJsonAdapter(historical_data_dir).get_market_snapshot(
         date(2026, 8, 20),
         [normalize_symbol("600613")],
     )
@@ -83,8 +83,8 @@ def test_historical_pool_replay_does_not_use_future_latest_json():
     assert validate_snapshot_provenance(snapshot).is_valid
 
 
-def test_missing_stock_data_is_missing_not_zero():
-    snapshot = ExistingJsonAdapter(DATA_DIR).get_market_snapshot(
+def test_missing_stock_data_is_missing_not_zero(historical_data_dir):
+    snapshot = ExistingJsonAdapter(historical_data_dir).get_market_snapshot(
         date(2026, 8, 20),
         [normalize_symbol("sh600519")],
     )
@@ -95,8 +95,8 @@ def test_missing_stock_data_is_missing_not_zero():
     assert metric.value is None
 
 
-def test_legacy_role_score_and_grade_are_explicitly_derived():
-    snapshot = ExistingJsonAdapter(DATA_DIR).get_market_snapshot(
+def test_legacy_role_score_and_grade_are_explicitly_derived(historical_data_dir):
+    snapshot = ExistingJsonAdapter(historical_data_dir).get_market_snapshot(
         TRADE_DAY,
         [normalize_symbol("603958")],
     )
@@ -107,8 +107,8 @@ def test_legacy_role_score_and_grade_are_explicitly_derived():
         assert any("derived" in item for item in metric.source.known_limitations)
 
 
-def test_missing_real_json_field_emits_missing_metric(tmp_path):
-    payload = json.loads((DATA_DIR / "latest.json").read_text(encoding="utf-8"))
+def test_missing_real_json_field_emits_missing_metric(tmp_path, historical_data_dir):
+    payload = json.loads((historical_data_dir / "latest.json").read_text(encoding="utf-8"))
     quote = next(item for item in payload["watchlist"] if item["code"] == "sh600519")
     quote.pop("amount_wan")
     (tmp_path / "latest.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -122,11 +122,11 @@ def test_missing_real_json_field_emits_missing_metric(tmp_path):
     assert turnover.value is None
 
 
-def test_conflicting_reason_taxonomies_are_preserved_side_by_side(tmp_path):
-    shutil.copy(DATA_DIR / "limit_up.json", tmp_path / "limit_up.json")
+def test_conflicting_reason_taxonomies_are_preserved_side_by_side(tmp_path, historical_data_dir):
+    shutil.copy(historical_data_dir / "limit_up.json", tmp_path / "limit_up.json")
     pool_dir = tmp_path / "pool_cache"
     pool_dir.mkdir()
-    shutil.copy(DATA_DIR / "pool_cache" / "20260821.json", pool_dir / "20260821.json")
+    shutil.copy(historical_data_dir / "pool_cache" / "20260821.json", pool_dir / "20260821.json")
 
     normalized = json.loads((tmp_path / "limit_up.json").read_text(encoding="utf-8"))
     stock = next(item for item in normalized["pool_a_leaders"] if item["code"] == "603958")

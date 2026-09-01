@@ -35,7 +35,7 @@ def membership(snapshot):
     )
 
 
-def deterministic_workflow(repository, data_dir=DATA_DIR):
+def deterministic_workflow(repository, data_dir):
     return ThesisWorkflow(
         repository,
         ExistingJsonAdapter(data_dir),
@@ -43,8 +43,8 @@ def deterministic_workflow(repository, data_dir=DATA_DIR):
     )
 
 
-def test_existing_adapter_creates_workflow_proposal_without_close_price_dependency(repository):
-    workflow = deterministic_workflow(repository)
+def test_existing_adapter_creates_workflow_proposal_without_close_price_dependency(repository, historical_data_dir):
+    workflow = deterministic_workflow(repository, historical_data_dir)
     card, proposal = workflow.start_thesis(
         "002437",
         DAY_1,
@@ -58,10 +58,10 @@ def test_existing_adapter_creates_workflow_proposal_without_close_price_dependen
     assert proposal.support_evidence[0].observation_ref_ids == [membership(snapshot).observation_ref_id]
 
 
-def test_no_reliable_price_field_does_not_raise_stop_iteration(repository, tmp_path):
+def test_no_reliable_price_field_does_not_raise_stop_iteration(repository, tmp_path, historical_data_dir):
     pool_dir = tmp_path / "pool_cache"
     pool_dir.mkdir()
-    shutil.copy(DATA_DIR / "pool_cache" / "20260821.json", pool_dir / "20260821.json")
+    shutil.copy(historical_data_dir / "pool_cache" / "20260821.json", pool_dir / "20260821.json")
     workflow = deterministic_workflow(repository, tmp_path)
     card, proposal = workflow.start_thesis(
         "002437",
@@ -78,8 +78,8 @@ def test_no_reliable_price_field_does_not_raise_stop_iteration(repository, tmp_p
     assert proposal.proposed_lifecycle_status is None
 
 
-def test_complete_pool_emits_available_true_and_false_membership():
-    adapter = ExistingJsonAdapter(DATA_DIR)
+def test_complete_pool_emits_available_true_and_false_membership(historical_data_dir):
+    adapter = ExistingJsonAdapter(historical_data_dir)
     present = membership(adapter.get_market_snapshot(DAY_1, [normalize_symbol("002437")]))
     absent = membership(adapter.get_market_snapshot(DAY_2, [normalize_symbol("002437")]))
 
@@ -90,8 +90,8 @@ def test_complete_pool_emits_available_true_and_false_membership():
     assert "data.info[code=002437]" not in absent.raw_reference
 
 
-def test_missing_pool_is_missing_not_false_and_builder_proposes_insufficient_evidence(tmp_path):
-    shutil.copy(DATA_DIR / "latest.json", tmp_path / "latest.json")
+def test_missing_pool_is_missing_not_false_and_builder_proposes_insufficient_evidence(tmp_path, historical_data_dir):
+    shutil.copy(historical_data_dir / "latest.json", tmp_path / "latest.json")
     adapter = ExistingJsonAdapter(tmp_path)
     snapshot = adapter.get_market_snapshot(DAY_2, [normalize_symbol("sh600519")])
     pool_membership = membership(snapshot)
@@ -108,11 +108,11 @@ def test_missing_pool_is_missing_not_false_and_builder_proposes_insufficient_evi
     repository.close()
 
 
-def test_stale_pool_is_excluded_and_disclosed(tmp_path):
-    shutil.copy(DATA_DIR / "latest.json", tmp_path / "latest.json")
+def test_stale_pool_is_excluded_and_disclosed(tmp_path, historical_data_dir):
+    shutil.copy(historical_data_dir / "latest.json", tmp_path / "latest.json")
     pool_dir = tmp_path / "pool_cache"
     pool_dir.mkdir()
-    shutil.copy(DATA_DIR / "pool_cache" / "20260820.json", pool_dir / "20260821.json")
+    shutil.copy(historical_data_dir / "pool_cache" / "20260820.json", pool_dir / "20260821.json")
 
     snapshot = ExistingJsonAdapter(tmp_path).get_market_snapshot(
         DAY_2,
@@ -147,8 +147,10 @@ def test_parse_error_is_explicit_and_cannot_generate_fact(tmp_path):
         (DataStatus.STALE, ProvenanceIssueCode.STALE_OBSERVATION),
     ],
 )
-def test_unusable_status_cannot_be_wrapped_as_unique_fact(status, expected_snapshot_issue):
-    snapshot = ExistingJsonAdapter(DATA_DIR).get_market_snapshot(
+def test_unusable_status_cannot_be_wrapped_as_unique_fact(
+    status, expected_snapshot_issue, historical_data_dir
+):
+    snapshot = ExistingJsonAdapter(historical_data_dir).get_market_snapshot(
         DAY_1,
         [normalize_symbol("002437")],
     )
@@ -174,11 +176,13 @@ def test_unusable_status_cannot_be_wrapped_as_unique_fact(status, expected_snaps
         assert expected_snapshot_issue in codes
 
 
-def test_conflicted_sector_without_metric_ref_is_not_directly_evidence_addressable(tmp_path):
-    shutil.copy(DATA_DIR / "limit_up.json", tmp_path / "limit_up.json")
+def test_conflicted_sector_without_metric_ref_is_not_directly_evidence_addressable(
+    tmp_path, historical_data_dir
+):
+    shutil.copy(historical_data_dir / "limit_up.json", tmp_path / "limit_up.json")
     pool_dir = tmp_path / "pool_cache"
     pool_dir.mkdir()
-    shutil.copy(DATA_DIR / "pool_cache" / "20260821.json", pool_dir / "20260821.json")
+    shutil.copy(historical_data_dir / "pool_cache" / "20260821.json", pool_dir / "20260821.json")
     payload = (tmp_path / "limit_up.json").read_text(encoding="utf-8")
     payload = payload.replace(
         "苹果产业链+机器人概念+重组+中报预计扭亏",
@@ -199,8 +203,10 @@ def test_conflicted_sector_without_metric_ref_is_not_directly_evidence_addressab
     assert all(not sector.metrics for sector in conflicted)
 
 
-def test_002437_two_day_real_replay_preserves_accepted_revision_until_human_decision(repository):
-    workflow = deterministic_workflow(repository)
+def test_002437_two_day_real_replay_preserves_accepted_revision_until_human_decision(
+    repository, historical_data_dir
+):
+    workflow = deterministic_workflow(repository, historical_data_dir)
     card, initial = workflow.start_thesis(
         "002437",
         DAY_1,

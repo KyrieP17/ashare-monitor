@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from thesis.candidates import CandidateCard, CandidateObservation, candidate_id_
 from thesis.market_environment_report import (
     EnvironmentConfidence,
     MarketEnvironmentReport,
+    build_market_environment_from_legacy,
     build_market_environment_report,
 )
 from thesis.models import DataStatus, MarketRegime
@@ -128,16 +128,34 @@ def test_market_overview_and_stock_lens_share_the_environment_report():
 
     assert "柚子视角 · 市场环境报告" in home
     assert "build_market_environment_report" in home
-    assert 'load("market_environment.json")' in home
+    assert "build_market_environment_from_legacy" in home
     assert "这是一份历史市场环境快照" in home
     assert "candidate_market_environment.regime" in thesis_page
 
 
-def test_committed_market_environment_snapshot_matches_the_typed_contract():
-    root = Path(__file__).resolve().parents[1]
-    payload = json.loads((root / "data" / "market_environment.json").read_text(encoding="utf-8"))
+def test_daily_legacy_artifact_builds_a_typed_current_market_report():
+    report = build_market_environment_from_legacy(
+        {
+            "meta": {
+                "trade_date": "20260831",
+                "prev_date": "20260828",
+                "total_limit_up": 86,
+                "prev_total": 81,
+                "open_ratio_pct": 47.7,
+                "promo_rate_pct": 45.5,
+                "max_board": 6,
+                "prev_max_board": 7,
+                "sentiment": "退潮期",
+                "themes_top": [["AI应用", 6], ["机器人", 4]],
+            }
+        }
+    )
 
-    report = MarketEnvironmentReport.model_validate(payload)
-    assert report.trade_date == date(2026, 8, 26)
-    assert report.regime is MarketRegime.DIVERGENCE
+    assert isinstance(report, MarketEnvironmentReport)
+    assert report.trade_date == date(2026, 8, 31)
+    assert report.regime is MarketRegime.RETREAT
+    assert report.stats.total_limit_up == 86
+    assert report.stats.open_ratio_pct == 47.7
+    assert report.stats.promotion_rate_pct == 45.5
+    assert report.stats.sector_resonance_count is None
     assert report.direct_trading_allowed is False
