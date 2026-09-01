@@ -9,7 +9,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_VENV = (PROJECT_ROOT / ".venv").resolve()
-PACKAGES = ("numpy", "pandas", "pyarrow", "streamlit", "plotly")
+PACKAGES = ("numpy", "pandas", "pyarrow", "streamlit", "plotly", "pydantic")
 
 
 def _inside(path: Path, parent: Path) -> bool:

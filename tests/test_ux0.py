@@ -24,9 +24,14 @@ def test_runtime_is_reproducibly_pinned_to_numpy_1x_project_environment():
     assert "numpy==1.26.4" in requirements
     assert "pandas==2.2.2" in requirements
     assert "pyarrow==16.1.0" in requirements
+    assert 'numpy==2.5.2; python_version >= "3.13"' in requirements
+    assert 'pandas==3.0.5; python_version >= "3.13"' in requirements
+    assert 'pyarrow==25.0.1; python_version >= "3.13"' in requirements
+    assert 'streamlit==1.62.0; python_version >= "3.13"' in requirements
+    assert 'pydantic==2.13.5; python_version >= "3.13"' in requirements
     assert ".venv\\Scripts\\python.exe" in launcher
     assert "-m streamlit run app.py" in launcher
-    for package in ("numpy", "pandas", "pyarrow", "streamlit", "plotly"):
+    for package in ("numpy", "pandas", "pyarrow", "streamlit", "plotly", "pydantic"):
         assert package in runtime_check
     assert "outside" in runtime_check.lower() or "external" in runtime_check.lower()
 
