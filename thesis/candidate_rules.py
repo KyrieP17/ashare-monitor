@@ -136,6 +136,11 @@ def _rule_for(observation: CandidateObservation) -> tuple[int, str] | None:
             and _number(metrics.get("lead_chg_pct")) >= 5
         ):
             return 4, RULE_SECTOR
+    if (
+        observation.source == "legacy.market.theme_counts"
+        and metrics.get("sector_resonance") is True
+    ):
+        return 4, RULE_SECTOR
     return None
 
 

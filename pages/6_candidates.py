@@ -11,9 +11,10 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from common import DISCLAIMER, esc, inject_css
+from common import DISCLAIMER, esc, inject_css, load
 from thesis.candidate_repository import SQLiteCandidateRepository
 from thesis.candidates import CandidateCard, CandidateDecision, ResearchJobStatus
+from thesis.legacy_candidate_adapter import build_legacy_candidate_cards
 from thesis.claude_code_runner import (
     ClaudeCodeUnavailableError,
     ClaudeResearchBusyError,
@@ -45,6 +46,7 @@ SOURCE_LABELS = {
     "public.tencent.watchlist": "腾讯行情 · 自选股",
     "public.ths.limit_up_pool": "同花顺公开涨停池",
     "public.sina.board_flow": "新浪板块资金流",
+    "legacy.market.theme_counts": "每日题材热度标记",
 }
 DECISION_LABELS = {
     CandidateDecision.PENDING: "待决定",
@@ -345,15 +347,29 @@ with SQLiteCandidateRepository(database) as repository:
         )
     latest_date = repository.latest_trade_date()
     cards = repository.list(trade_date=latest_date) if latest_date else []
+    using_legacy_fallback = False
+
+    if not cards and is_cloud:
+        cards = build_legacy_candidate_cards(load("limit_up.json"))
+        latest_date = cards[0].trade_date if cards else None
+        using_legacy_fallback = bool(cards)
+        if cards:
+            st.info("云端候选由每日提交的 limit_up.json 只读生成；操作按钮已禁用，不写入 SQLite。")
 
     if not cards:
         st.warning("尚无候选数据。请先在本地运行公开市场扫描。")
     else:
-        total_count = len(repository.list())
-        st.caption(
-            f"候选交易日：{latest_date.isoformat()} · 当日数据库累计候选 {len(cards)} 只 · "
-            f"数据库累计候选 {total_count} 只"
-        )
+        if using_legacy_fallback:
+            st.caption(
+                f"候选交易日：{latest_date.isoformat()} · 每日快照只读候选 {len(cards)} 只 · "
+                "未写入云端临时数据库"
+            )
+        else:
+            total_count = len(repository.list())
+            st.caption(
+                f"候选交易日：{latest_date.isoformat()} · 当日数据库累计候选 {len(cards)} 只 · "
+                f"数据库累计候选 {total_count} 只"
+            )
         focus_cards = [card for card in cards if "RESEARCH_FOCUS" in card.trigger_rules]
         market_cards = [card for card in cards if "RESEARCH_FOCUS" not in card.trigger_rules]
         _render_section(

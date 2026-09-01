@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import Field
 
 from .candidates import CandidateCard
+from .legacy_candidate_adapter import build_legacy_candidate_cards, legacy_pool_rows
 from .models import DomainModel, MarketRegime
 
 
@@ -172,6 +173,21 @@ def build_market_environment_from_legacy(
     previous_max = _legacy_int(meta.get("prev_max_board"))
     open_ratio = _legacy_float(meta.get("open_ratio_pct"))
     promotion_rate = _legacy_float(meta.get("promo_rate_pct"))
+    legacy_rows = legacy_pool_rows(payload)
+    legacy_candidates = build_legacy_candidate_cards(payload)
+    known_opens = [
+        float(value)
+        for candidate in legacy_candidates
+        for observation in candidate.observations
+        if observation.source == "public.ths.limit_up_pool"
+        if (value := observation.metrics.get("open_num")) is not None
+    ]
+    high_divergence_count = sum(value >= 3 for value in known_opens)
+    sector_resonance_count = (
+        sum("SECTOR_RESONANCE" in candidate.trigger_rules for candidate in legacy_candidates)
+        if legacy_candidates
+        else None
+    )
     change = _pct_change(total, previous_total)
     regime = {
         "进攻期": MarketRegime.ATTACK,
@@ -182,14 +198,15 @@ def build_market_environment_from_legacy(
         total_limit_up=total,
         previous_total_limit_up=previous_total,
         total_limit_up_change_pct=change,
-        selected_limit_up_count=0,
+        selected_limit_up_count=len(legacy_candidates),
         selected_max_board=max_board,
         previous_selected_max_board=previous_max,
-        known_open_count=0,
+        known_open_count=len(known_opens),
+        average_open_num=mean(known_opens) if known_opens else None,
         open_ratio_pct=open_ratio,
         promotion_rate_pct=promotion_rate,
-        high_divergence_count=0,
-        sector_resonance_count=None,
+        high_divergence_count=high_divergence_count,
+        sector_resonance_count=sector_resonance_count,
     )
     evidence: list[str] = []
     if total is not None:
@@ -206,6 +223,13 @@ def build_market_environment_from_legacy(
         evidence.append(f"全量扫描记录的开板率为 {open_ratio:.1f}%。")
     if promotion_rate is not None:
         evidence.append(f"旧版昨日连板集合口径的晋级率为 {promotion_rate:.1f}%。")
+    if known_opens:
+        evidence.append(
+            f"确定性规则选出的 {len(known_opens)} 只候选平均开板 {mean(known_opens):.1f} 次，"
+            f"其中 {high_divergence_count} 只开板至少 3 次。"
+        )
+    if sector_resonance_count is not None:
+        evidence.append(f"入选候选中有 {sector_resonance_count} 只命中 legacy theme_hot 板块热度标记。")
 
     structure: list[str] = []
     if change is not None:
@@ -225,6 +249,10 @@ def build_market_environment_from_legacy(
         ]
         if normalized_themes:
             structure.append("题材集中度观察：" + "、".join(normalized_themes) + "。")
+    if sector_resonance_count:
+        structure.append(
+            f"板块共振候选 {sector_resonance_count} 只；该数字来自个股 theme_hot 标记，不等同于席位协同。"
+        )
 
     risks: list[str] = []
     if open_ratio is not None and open_ratio >= 40:
@@ -251,7 +279,9 @@ def build_market_environment_from_legacy(
         scenarios=_scenarios(),
         limitations=[
             "该报告使用每日提交的 legacy limit_up.json；市场统计较完整，但旧版角色、分数和荐股结论没有被复用。",
-            "开板率与晋级率沿用历史扫描器口径，尚未迁移为 Candidate Observation 级审计字段。",
+            f"legacy 三池共有 {len(legacy_rows)} 只去重个股；候选指标只统计确定性规则排序后的 {len(legacy_candidates)} 只，避免口径混用。",
+            "开板率与晋级率沿用历史扫描器口径；平均开板来自去重后的 legacy 个股 open_num 字段。",
+            "板块共振使用 legacy theme_hot 确定性标记，不代表席位协同或主力意图。",
             "未读取账户、席位明细或券商交易接口，不能确认特定游资或主力意图。",
             "该报告只用于研究环境分层，不生成仓位、买点、买卖或下单指令。",
         ],

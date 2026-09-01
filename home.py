@@ -22,6 +22,7 @@ from thesis.market_environment_report import (
     build_market_environment_from_legacy,
     build_market_environment_report,
 )
+from thesis.legacy_candidate_adapter import build_legacy_candidate_cards
 from thesis.scan_status_ui import render_scan_status
 
 
@@ -195,6 +196,10 @@ with SQLiteCandidateRepository(candidate_db) as candidate_repository:
     market_environment = build_market_environment_report(all_candidate_cards)
 
 legacy_limit_up = load("limit_up.json")
+legacy_candidate_cards = build_legacy_candidate_cards(legacy_limit_up)
+if not candidate_cards and legacy_candidate_cards:
+    candidate_cards = legacy_candidate_cards
+    candidate_date = legacy_candidate_cards[0].trade_date
 legacy_market_environment = build_market_environment_from_legacy(legacy_limit_up)
 available_environment_reports = [
     report
