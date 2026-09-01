@@ -21,13 +21,17 @@ from thesis.models import (
     ThesisLifecycleStatus,
 )
 from thesis.openai_provider import (
+    OpenAIAuthenticationError,
     OpenAIProviderAdapter,
     OpenAIProviderError,
     OpenAIProviderTimeoutError,
+    OpenAIQuotaError,
+    OpenAIRateLimitError,
     OpenAIRequiredEvidenceError,
     OpenAIResearchRequest,
     OpenAIResponseFormatError,
     OpenAIToolLimitError,
+    RequestsOpenAITransport,
     _function_calls,
     openai_tool_schemas,
 )
@@ -75,6 +79,14 @@ class SuccessfulFakeOpenAITransport:
                             "instrument_id": SYMBOL,
                             "trade_date": DAY.isoformat(),
                             "lookback_days": 1,
+                        },
+                    ),
+                    _call(
+                        "fc_catalyst_real_id",
+                        ToolName.GET_CATALYST_CONTEXT.value,
+                        {
+                            "instrument_id": SYMBOL,
+                            "trade_date": DAY.isoformat(),
                         },
                     ),
                 ],
@@ -187,6 +199,31 @@ def test_provider_timeout_and_transport_errors_are_explicit(failure):
     repository.close()
 
 
+def test_http_429_is_explicit_and_exposes_only_safe_diagnostics():
+    class Response:
+        status_code = 429
+        headers = {"Retry-After": "17", "x-request-id": "req_safe_123"}
+
+        def json(self):
+            return {"error": {"code": "rate_limit_exceeded", "message": "sensitive body"}}
+
+    class Session:
+        def post(self, *args, **kwargs):
+            return Response()
+
+    transport = RequestsOpenAITransport(api_key="secret-key", session=Session())
+    with pytest.raises(OpenAIRateLimitError) as captured:
+        transport.create_response({"input": "fake"}, timeout_seconds=1)
+    error = captured.value
+    assert error.status_category == "rate_limit"
+    assert error.retryable is True
+    assert error.retry_after == "17"
+    assert error.request_id == "req_safe_123"
+    assert "HTTP 429" in str(error)
+    assert "secret-key" not in str(error)
+    assert "sensitive body" not in str(error)
+
+
 def test_failed_typed_tool_is_audited_with_provider_call_id():
     class InvalidLookbackTransport:
         def __init__(self):
@@ -275,6 +312,7 @@ def test_offline_fake_openai_e2e_persists_audited_pending_proposal(tmp_path):
     assert [item.llm_tool_call_id for item in result.tool_invocations] == [
         "fc_market_real_id",
         "fc_stock_real_id",
+        "fc_catalyst_real_id",
     ]
     assert all(item.returned_observation_ref_ids for item in result.tool_invocations)
     assert not any(

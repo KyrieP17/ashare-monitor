@@ -23,8 +23,10 @@ from thesis.models import (
 )
 from thesis.gate3_generator import RecordedProposalGenerator
 from thesis.gate3_graph import Gate3OfflineWorkflow
+from thesis.gate3_models import ToolName
 from thesis.promotion import (
     CandidatePromotionService,
+    OpenAILiveDisabledError,
     PromotionResearchError,
     ResearchExecution,
     ResearchMode,
@@ -114,6 +116,18 @@ def test_promote_runs_recorded_research_accepts_and_reopens(tmp_path, monkeypatc
         review = theses.get_proposal_review(proposal.revision_id)
         assert review.generator_kind == "recorded"
         assert review.graph_trace[-1] == "ready_for_human_review"
+        assert [item.tool_name for item in theses.list_tool_invocations()] == [
+            ToolName.GET_MARKET_SNAPSHOT,
+            ToolName.GET_STOCK_OBSERVATION,
+            ToolName.GET_CATALYST_CONTEXT,
+        ]
+        catalyst_evidence = [
+            item
+            for item in proposal.support_evidence
+            if any(ref.endswith(":catalyst_reason") for ref in item.metric_refs)
+        ]
+        assert len(catalyst_evidence) == 1
+        assert "普通首板测试证据" in catalyst_evidence[0].claim
         theses.review_proposal(proposal.revision_id, ReviewDecision.ACCEPT)
 
     with SQLiteCandidateRepository(database) as candidates, SQLiteThesisRepository(database) as reopened:
@@ -124,6 +138,30 @@ def test_promote_runs_recorded_research_accepts_and_reopens(tmp_path, monkeypatc
         assert proposal.accepted is True
         assert len(reopened.list_decisions(card.thesis_id)) == 1
         assert candidates.get(saved.candidate_id).user_decision is CandidateDecision.PROMOTE
+
+
+def test_promote_stays_recorded_when_openai_key_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "must-never-be-used-by-promote")
+    database = tmp_path / "key-does-not-route.sqlite"
+    with SQLiteCandidateRepository(database) as candidates, SQLiteThesisRepository(database) as theses:
+        saved = candidates.upsert([candidate("002294")])[0]
+        outcome = CandidatePromotionService(candidates, theses).promote(saved.candidate_id)
+        assert outcome.mode is ResearchMode.RECORDED
+        review = theses.get_proposal_review(outcome.proposal_revision_id)
+        assert review.generator_kind == "recorded"
+
+
+def test_openai_live_requires_enable_flag_before_provider_construction(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "configured-but-disabled")
+    monkeypatch.delenv("ENABLE_OPENAI_LIVE", raising=False)
+    database = tmp_path / "openai-disabled.sqlite"
+    with SQLiteCandidateRepository(database) as candidates, SQLiteThesisRepository(database) as theses:
+        saved = candidates.upsert([candidate("002293")])[0]
+        with pytest.raises(OpenAILiveDisabledError, match="disabled"):
+            CandidatePromotionService(candidates, theses).promote_openai_live(
+                saved.candidate_id, confirmed=True
+            )
+        assert theses.list_cards() == []
 
 
 def test_repeat_promote_reuses_active_thesis(tmp_path, monkeypatch):

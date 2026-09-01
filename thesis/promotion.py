@@ -4,7 +4,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from .candidate_repository import SQLiteCandidateRepository
 from .candidate_research_adapter import CandidateResearchAdapter
@@ -27,6 +27,10 @@ class ResearchMode(StrEnum):
 
 class PromotionResearchError(RuntimeError):
     pass
+
+
+class OpenAILiveDisabledError(PromotionResearchError):
+    """Raised before provider construction when the opt-in boundary is closed."""
 
 
 @dataclass(frozen=True)
@@ -101,29 +105,27 @@ class CandidatePromotionService:
             else DiscoverySource.MARKET_ACTIVITY
         )
         note = f"Candidate PROMOTE: {candidate.reason_text}"
-        if os.environ.get("OPENAI_API_KEY"):
-            tools = ReadOnlyMarketTools(
-                adapter,
-                self.thesis_repository,
-                default_instruments=[candidate.instrument_id],
-            )
-            provider = OpenAIProviderAdapter(RequestsOpenAITransport(), tools)
-            result = OpenAIInitialResearchWorkflow(
-                self.thesis_repository,
-                provider,
-                reviewer=RecordedSemanticReviewer(),
-            ).start_initial_thesis(
-                adapter.instrument,
-                candidate.trade_date,
-                source,
-                note,
-            )
-            return ResearchExecution(
-                thesis_id=result.thesis_id,
-                proposal_revision_id=result.proposal_revision_id,
-                mode=ResearchMode.OPENAI_LIVE,
-            )
-
+        tools = ReadOnlyMarketTools(
+            adapter,
+            self.thesis_repository,
+            default_instruments=[candidate.instrument_id],
+        )
+        recorded_prefix = f"recorded-promote:{uuid4()}"
+        tools.get_market_snapshot(
+            candidate.trade_date,
+            [candidate.instrument_id],
+            llm_tool_call_id=f"{recorded_prefix}:market",
+        )
+        tools.get_stock_observation(
+            candidate.instrument_id,
+            candidate.trade_date,
+            llm_tool_call_id=f"{recorded_prefix}:stock",
+        )
+        tools.get_catalyst_context(
+            candidate.instrument_id,
+            candidate.trade_date,
+            llm_tool_call_id=f"{recorded_prefix}:catalyst",
+        )
         result = Gate3OfflineWorkflow(
             self.thesis_repository,
             adapter,
@@ -144,6 +146,58 @@ class CandidatePromotionService:
             thesis_id=result.thesis_id,
             proposal_revision_id=result.proposal_revision_id,
             mode=ResearchMode.RECORDED,
+        )
+
+    def promote_openai_live(
+        self,
+        candidate_id: str,
+        *,
+        confirmed: bool,
+    ) -> PromotionOutcome:
+        """Run the separately gated, explicitly confirmed paid-provider path."""
+        if os.environ.get("ENABLE_OPENAI_LIVE") != "1":
+            raise OpenAILiveDisabledError("OpenAI live research is disabled")
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise OpenAILiveDisabledError("OpenAI live research has no configured API key")
+        if not confirmed:
+            raise OpenAILiveDisabledError("OpenAI live research requires explicit confirmation")
+
+        candidate = self.candidate_repository.get(candidate_id)
+        existing = self.thesis_repository.find_active_card_by_instrument(
+            candidate.instrument_id
+        )
+        if existing is not None:
+            proposal_id, mode = self._existing_research(existing.thesis_id)
+            return PromotionOutcome(existing.thesis_id, proposal_id, mode, True)
+
+        adapter = CandidateResearchAdapter(candidate)
+        source = (
+            DiscoverySource.WATCHLIST
+            if {"RESEARCH_FOCUS", "WATCHLIST_ACTIVITY"} & set(candidate.trigger_rules)
+            else DiscoverySource.MARKET_ACTIVITY
+        )
+        tools = ReadOnlyMarketTools(
+            adapter,
+            self.thesis_repository,
+            default_instruments=[candidate.instrument_id],
+        )
+        provider = OpenAIProviderAdapter(RequestsOpenAITransport(), tools)
+        result = OpenAIInitialResearchWorkflow(
+            self.thesis_repository,
+            provider,
+            reviewer=RecordedSemanticReviewer(),
+        ).start_initial_thesis(
+            adapter.instrument,
+            candidate.trade_date,
+            source,
+            f"Explicit OpenAI research: {candidate.reason_text}",
+        )
+        self.candidate_repository.set_decision(candidate_id, CandidateDecision.PROMOTE)
+        return PromotionOutcome(
+            result.thesis_id,
+            result.proposal_revision_id,
+            ResearchMode.OPENAI_LIVE,
+            False,
         )
 
     def _existing_research(self, thesis_id: UUID) -> tuple[UUID | None, ResearchMode]:
@@ -168,3 +222,8 @@ class CandidatePromotionService:
             else ResearchMode.RECORDED
         )
         return proposal.revision_id, mode
+
+
+def openai_live_available(environ: dict[str, str] | None = None) -> bool:
+    values = environ if environ is not None else os.environ
+    return values.get("ENABLE_OPENAI_LIVE") == "1" and bool(values.get("OPENAI_API_KEY"))

@@ -19,7 +19,7 @@ def render_scan_status(repository: SQLiteCandidateRepository, *, expanded: bool 
         columns[0].metric("最近模式", latest.mode.value.upper())
         columns[1].metric("最近状态", display.label)
         columns[2].metric("Observation", latest.observation_count)
-        columns[3].metric("Candidate", latest.candidate_count)
+        columns[3].metric("本轮生成候选", latest.candidate_count)
         st.caption(
             f"开始（北京时间）{format_beijing(latest.started_at)} · "
             f"结束（北京时间）{format_beijing(latest.completed_at)} · "

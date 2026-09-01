@@ -17,6 +17,7 @@ from common import DISCLAIMER, inject_css, load
 from thesis.candidate_repository import SQLiteCandidateRepository
 from thesis.candidates import CandidateDecision, ScanRunStatus
 from thesis.freshness import artifact_freshness
+from thesis.market_environment_report import MarketEnvironmentReport, build_market_environment_report
 from thesis.scan_status_ui import render_scan_status
 
 
@@ -28,6 +29,80 @@ is_cloud = bool(
     or os.environ.get("STREAMLIT_RUNTIME_ENV") == "cloud"
     or os.environ.get("IS_STREAMLIT_CLOUD")
 )
+
+REGIME_LABELS = {
+    "attack": "进攻",
+    "divergence": "分歧",
+    "retreat": "退潮",
+    "unknown": "未知",
+}
+
+
+def _render_market_environment(report: MarketEnvironmentReport, *, stale: bool) -> None:
+    st.markdown("### 柚子视角 · 市场环境报告")
+    st.caption(
+        f"交易日 {report.trade_date.isoformat()} · 环境 {REGIME_LABELS[report.regime.value]} · "
+        f"证据置信度 {report.confidence.value.upper()}"
+    )
+    if stale:
+        st.error("这是一份历史市场环境快照，不代表当前交易日状态。")
+        st.warning(report.headline)
+    elif report.regime.value == "divergence":
+        st.warning(report.headline)
+    elif report.regime.value == "attack":
+        st.success(report.headline)
+    else:
+        st.info(report.headline)
+
+    first, second, third, fourth = st.columns(4)
+    breadth_delta = (
+        f"{report.stats.total_limit_up_change_pct:+.1f}%"
+        if report.stats.total_limit_up_change_pct is not None
+        else None
+    )
+    first.metric(
+        "涨停池覆盖",
+        report.stats.total_limit_up if report.stats.total_limit_up is not None else "数据不足",
+        breadth_delta,
+    )
+    second.metric(
+        "候选空间高度",
+        f"{report.stats.selected_max_board} 板"
+        if report.stats.selected_max_board is not None
+        else "数据不足",
+    )
+    third.metric(
+        "已知样本平均开板",
+        f"{report.stats.average_open_num:.1f} 次"
+        if report.stats.average_open_num is not None
+        else "数据不足",
+    )
+    fourth.metric("板块共振候选", report.stats.sector_resonance_count)
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**结构判断**")
+        for item in report.structure_read:
+            st.write(f"- {item}")
+    with right:
+        st.markdown("**风险与反证**")
+        if report.risk_signals:
+            for item in report.risk_signals:
+                st.write(f"- {item}")
+        else:
+            st.caption("当前没有达到规则阈值的结构性风险信号。")
+
+    with st.expander("证据、三情景与数据边界"):
+        st.markdown("**证据**")
+        for item in report.evidence:
+            st.write(f"- {item}")
+        st.markdown("**三情景**")
+        for scenario in report.scenarios:
+            st.write(f"- {scenario.name}：{scenario.confirmation}")
+            st.caption(scenario.interpretation)
+        st.markdown("**限制**")
+        for item in report.limitations:
+            st.caption(f"- {item}")
 
 st.markdown("## A股 Monitor · CandidateCard 工作台")
 st.caption("CandidateCard 由确定性规则生成，不是买入建议；当前广度数据来自公开数据源。")
@@ -102,7 +177,18 @@ with SQLiteCandidateRepository(candidate_db) as candidate_repository:
         expanded=st.session_state.get("show_scan_details", False),
     )
     candidate_date = candidate_repository.latest_trade_date()
-    candidate_cards = candidate_repository.list(trade_date=candidate_date) if candidate_date else []
+    all_candidate_cards = candidate_repository.list()
+    candidate_cards = (
+        [card for card in all_candidate_cards if card.trade_date == candidate_date]
+        if candidate_date
+        else []
+    )
+    market_environment = build_market_environment_report(all_candidate_cards)
+
+if market_environment is None:
+    market_environment_payload = load("market_environment.json")
+    if market_environment_payload:
+        market_environment = MarketEnvironmentReport.model_validate(market_environment_payload)
 
 visible_candidates = [card for card in candidate_cards if card.user_decision is not CandidateDecision.IGNORE]
 st.markdown("#### 候选摘要")
@@ -115,6 +201,15 @@ if candidate_date:
     )
 else:
     st.info("尚无本地候选。请运行一次候选刷新；云端页面不代表持续扫描。")
+
+if market_environment is not None:
+    market_environment_freshness = artifact_freshness(
+        market_environment.model_dump(mode="json")
+    )
+    _render_market_environment(
+        market_environment,
+        stale=market_environment_freshness.stale,
+    )
 
 st.divider()
 st.warning(

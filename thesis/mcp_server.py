@@ -94,6 +94,20 @@ class MCPResearchService:
             )
         return [item.model_dump(mode="json") for item in result]
 
+    def get_catalyst_context(
+        self,
+        instrument_id: str,
+        trade_date_value: str,
+    ) -> dict[str, Any]:
+        candidate = self._candidate_for_symbol(trade_date_value, instrument_id)
+        with SQLiteThesisRepository(self.database) as repository:
+            result = self._tools(candidate, repository).get_catalyst_context(
+                candidate.instrument_id,
+                candidate.trade_date,
+                llm_tool_call_id=self._call_id(),
+            )
+        return result.model_dump(mode="json")
+
     def get_price_volume_context(
         self,
         instrument_id: str,
@@ -116,14 +130,15 @@ class MCPResearchService:
         thesis_id: str,
         proposal: dict[str, Any],
         claude_model: str,
+        client_kind: str = "claude-desktop",
     ) -> dict[str, Any]:
         """Validate a Claude-authored initial proposal, then persist it unaccepted."""
 
-        generator_kind = self._generator_kind(claude_model)
+        generator_kind = self._generator_kind(claude_model, client_kind)
         if generator_kind is None:
             return self._error(
                 "invalid_model_info",
-                "claude_model must identify the Claude model and cannot be empty.",
+                "claude_model must be non-empty and client_kind must be claude-desktop or claude-code.",
             )
         try:
             expected_thesis_id = UUID(thesis_id)
@@ -195,7 +210,7 @@ class MCPResearchService:
                 proposal_revision_id=validated.revision_id,
                 semantic_review=semantic_review,
                 graph_trace=[
-                    "claude_desktop",
+                    client_kind.replace("-", "_"),
                     "hard_validation",
                     "semantic_reviewer",
                     "ready_for_human_review",
@@ -213,6 +228,8 @@ class MCPResearchService:
                 discovery_source=DiscoverySource.EXTERNAL_PLATFORM,
                 discovery_note=(
                     "Claude Desktop + MCP interactive research; manually initiated by the user."
+                    if client_kind == "claude-desktop"
+                    else "AShare Monitor + Claude Code research; explicitly initiated by the user."
                 ),
                 created_from_snapshot_id=snapshot.snapshot_id,
                 created_at=datetime.now(UTC),
@@ -282,9 +299,13 @@ class MCPResearchService:
         return f"claude-mcp:{uuid4()}"
 
     @staticmethod
-    def _generator_kind(model_info: str) -> str | None:
+    def _generator_kind(model_info: str, client_kind: str) -> str | None:
         clean = " ".join(str(model_info).split()).strip()[:80]
-        return f"claude-mcp:{clean}" if clean else None
+        prefix = {
+            "claude-desktop": "claude-mcp",
+            "claude-code": "claude-code",
+        }.get(client_kind)
+        return f"{prefix}:{clean}" if prefix and clean else None
 
     @staticmethod
     def _error(code: str, message: str) -> dict[str, Any]:
@@ -303,7 +324,7 @@ def create_mcp_server(service: MCPResearchService | None = None) -> FastMCP:
     server = FastMCP(
         SERVER_NAME,
         instructions=(
-            "Interactive, local A-share research tools for Claude Desktop. "
+            "Local A-share research tools for approved Claude clients. "
             "This server never starts research automatically. Read evidence first, then call "
             "submit_thesis_proposal with a complete unaccepted ThesisRevision."
         ),
@@ -350,12 +371,21 @@ def create_mcp_server(service: MCPResearchService | None = None) -> FastMCP:
         return service.get_price_volume_context(instrument_id, end_trade_date, lookback_days)
 
     @server.tool()
+    def get_catalyst_context(
+        instrument_id: str,
+        trade_date: str,
+    ) -> dict[str, Any]:
+        """Return sourced limit-up reason/theme text; MISSING is never filled or inferred."""
+        return service.get_catalyst_context(instrument_id, trade_date)
+
+    @server.tool()
     def submit_thesis_proposal(
         instrument_id: str,
         trade_date: str,
         thesis_id: str,
         proposal: dict[str, Any],
         claude_model: str,
+        client_kind: str = "claude-desktop",
     ) -> dict[str, Any]:
         """Hard-validate and persist one Claude proposal as pending; never auto-accept."""
         return service.submit_thesis_proposal(
@@ -364,6 +394,7 @@ def create_mcp_server(service: MCPResearchService | None = None) -> FastMCP:
             thesis_id,
             proposal,
             claude_model,
+            client_kind,
         )
 
     # FastMCP derives an ordinary MCP JSON Schema from the Python signature.

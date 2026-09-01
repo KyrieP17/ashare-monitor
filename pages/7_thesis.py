@@ -13,8 +13,11 @@ sys.path.insert(0, str(ROOT))
 
 from common import DISCLAIMER, inject_css
 from thesis.candidate_repository import SQLiteCandidateRepository
+from thesis.hot_money_lens import HotMoneyLensReport, ScenarioEffect, build_hot_money_lens
+from thesis.market_environment_report import build_market_environment_report
 from thesis.models import (
     EvidenceItem,
+    MarketRegime,
     ReviewDecision,
     RevisionChanges,
     ThesisAssessment,
@@ -40,6 +43,11 @@ ASSESSMENT_LABELS = {
     ThesisAssessment.WEAKENING: "减弱",
     ThesisAssessment.CONFLICTED: "冲突",
 }
+SCENARIO_EFFECT_LABELS = {
+    ScenarioEffect.STRENGTHEN: "强化研究假设",
+    ScenarioEffect.OBSERVE: "保持观察",
+    ScenarioEffect.WEAKEN: "减弱或证伪",
+}
 
 
 def _mode_label(generator_kind: str) -> str:
@@ -49,6 +57,11 @@ def _mode_label(generator_kind: str) -> str:
         return (
             "Claude Desktop + MCP · 交互式研究 · "
             f"{generator_kind.removeprefix('claude-mcp:')}"
+        )
+    if generator_kind.startswith("claude-code:"):
+        return (
+            "AShare Monitor + Claude Code · 外接深研 · "
+            f"{generator_kind.removeprefix('claude-code:')}"
         )
     return MODE_LABELS.get(generator_kind, f"Recorded/Fake · {generator_kind} · 非真实研究")
 
@@ -98,6 +111,28 @@ def _render_list(title: str, values: list[str], empty: str) -> None:
             st.write(f"- {value}")
     else:
         st.caption(empty)
+
+
+def _render_hot_money_lens(report: HotMoneyLensReport) -> None:
+    st.caption("研究视角，不是交易指令；不读取账户、不执行交易。")
+    role_col, confidence_col = st.columns(2)
+    role_col.metric("短线角色", report.role)
+    confidence_col.metric("证据置信度", report.confidence.value.upper())
+    _render_list("角色依据", report.role_basis, "没有足够证据分配短线角色。")
+    st.markdown("**市场环境适配**")
+    st.write(report.market_fit)
+    _render_list("对手盘与筹码交换", report.opponent_view, "缺少可用的盘口结构证据。")
+    _render_list("Price In 复核", report.price_in_view, "尚无 Price In 判断。")
+    _render_list("反证优先项", report.counter_signals, "当前 proposal 没有结构化反证。")
+    st.markdown("**三情景复核**")
+    for scenario in report.scenarios:
+        st.write(f"- {scenario.name} · {SCENARIO_EFFECT_LABELS[scenario.effect]}")
+        st.caption(f"触发：{scenario.trigger}")
+        st.caption(f"研究动作：{scenario.research_response}")
+    with st.expander("Lens 证据引用与限制"):
+        st.caption("Observation：" + "、".join(report.observation_ref_ids or ["无"]))
+        for limitation in report.limitations:
+            st.caption(f"限制：{limitation}")
 
 
 def _review_actions(repository: SQLiteThesisRepository, proposal) -> None:
@@ -186,14 +221,25 @@ st.caption(
     "Claude Desktop + MCP 是需要你主动发起对话的手动研究入口，不会由 PROMOTE 自动触发；"
     "它与 OpenAI 自动化路径不是同一种运行方式。"
 )
+st.caption(
+    "Candidate 页的“Claude 深研”会启动受限 Claude Code 后台任务；结果仍只作为 pending proposal，"
+    "必须由你接受、修改或拒绝。"
+)
+show_hot_money_lens = st.toggle(
+    "启用游资情绪与对手盘 Lens",
+    value=True,
+    help="从当前不可变 Snapshot 与 Proposal 生成结构化复核卡，不新增 Agent，也不产生交易权限。",
+)
 st.page_link("pages/6_candidates.py", label="← 返回候选箱")
 
 database = Path(os.environ.get("THESIS_DB_PATH", str(ROOT / "data" / "thesis.db")))
 with SQLiteCandidateRepository(database) as candidate_repository:
+    all_candidates = candidate_repository.list()
     candidate_names = {
         candidate.instrument_id: candidate.instrument_name
-        for candidate in candidate_repository.list()
+        for candidate in all_candidates
     }
+    candidate_market_environment = build_market_environment_report(all_candidates)
 with SQLiteThesisRepository(database) as repository:
     cards = repository.list_cards()
     if not cards:
@@ -224,6 +270,28 @@ with SQLiteThesisRepository(database) as repository:
                     f"{ASSESSMENT_LABELS[accepted.assessment]}"
                 )
                 st.write(accepted.market_expectation)
+                if show_hot_money_lens:
+                    try:
+                        accepted_snapshot = repository.get_snapshot(accepted.based_on_snapshot_id)
+                    except NotFoundError:
+                        st.warning("游资 Lens 无法加载：accepted revision 对应的 Snapshot 不存在。")
+                    else:
+                        if (
+                            accepted_snapshot.market_regime is MarketRegime.UNKNOWN
+                            and candidate_market_environment is not None
+                            and accepted_snapshot.trade_date == candidate_market_environment.trade_date
+                        ):
+                            accepted_snapshot = accepted_snapshot.model_copy(
+                                update={"market_regime": candidate_market_environment.regime}
+                            )
+                        with st.expander("已接受研究 · 游资情绪与对手盘 Lens", expanded=True):
+                            _render_hot_money_lens(
+                                build_hot_money_lens(
+                                    accepted_snapshot,
+                                    accepted,
+                                    card.instrument.instrument_id,
+                                )
+                            )
             elif not pending:
                 st.info("该 ThesisCard 当前没有待审核或已接受的 revision。")
 
@@ -242,6 +310,29 @@ with SQLiteThesisRepository(database) as repository:
                 _render_list("失效条件", proposal.invalidation_conditions, "当前没有结构化失效条件。")
                 if proposal.invalidation_response:
                     st.caption(f"失效处理：{proposal.invalidation_response}")
+
+                if show_hot_money_lens:
+                    try:
+                        lens_snapshot = repository.get_snapshot(proposal.based_on_snapshot_id)
+                    except NotFoundError:
+                        st.warning("游资 Lens 无法加载：该 proposal 对应的 Snapshot 不存在。")
+                    else:
+                        if (
+                            lens_snapshot.market_regime is MarketRegime.UNKNOWN
+                            and candidate_market_environment is not None
+                            and lens_snapshot.trade_date == candidate_market_environment.trade_date
+                        ):
+                            lens_snapshot = lens_snapshot.model_copy(
+                                update={"market_regime": candidate_market_environment.regime}
+                            )
+                        with st.expander("游资情绪与对手盘 Lens", expanded=True):
+                            _render_hot_money_lens(
+                                build_hot_money_lens(
+                                    lens_snapshot,
+                                    proposal,
+                                    card.instrument.instrument_id,
+                                )
+                            )
 
                 st.markdown("**Semantic Reviewer issues**")
                 st.write(review.semantic_review.summary)

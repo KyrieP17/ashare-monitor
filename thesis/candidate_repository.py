@@ -6,7 +6,15 @@ from datetime import date
 from pathlib import Path
 from typing import Iterator
 
-from .candidates import CandidateCard, CandidateDecision, ScanMode, ScanRun, ScanRunStatus
+from .candidates import (
+    CandidateCard,
+    CandidateDecision,
+    ResearchJob,
+    ResearchJobStatus,
+    ScanMode,
+    ScanRun,
+    ScanRunStatus,
+)
 from .models import DataStatus
 from .price_volume import PriceVolumeContext
 
@@ -31,6 +39,21 @@ class SQLiteCandidateRepository:
                 UNIQUE (trade_date, instrument_id)
             )
             """
+        )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS research_jobs (
+                job_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                payload TEXT NOT NULL
+            )
+            """
+        )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS ix_research_jobs_candidate_requested "
+            "ON research_jobs(candidate_id, requested_at DESC)"
         )
         self._connection.execute(
             """
@@ -173,6 +196,101 @@ class SQLiteCandidateRepository:
                 (decision.value, card.model_dump_json(), candidate_id),
             )
         return card
+
+    def create_research_job(self, job: ResearchJob) -> ResearchJob:
+        if job.status is not ResearchJobStatus.QUEUED:
+            raise ValueError("new research job must start as QUEUED")
+        with self._transaction() as connection:
+            active = connection.execute(
+                """
+                SELECT payload FROM research_jobs
+                WHERE status IN (?, ?)
+                ORDER BY requested_at DESC LIMIT 1
+                """,
+                (
+                    ResearchJobStatus.QUEUED.value,
+                    ResearchJobStatus.RUNNING.value,
+                ),
+            ).fetchone()
+            if active is not None:
+                active_job = ResearchJob.model_validate_json(active["payload"])
+                raise ValueError(
+                    "global Claude research job limit reached: "
+                    f"{active_job.instrument_id}"
+                )
+            connection.execute(
+                """
+                INSERT INTO research_jobs(job_id, candidate_id, status, requested_at, payload)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(job.job_id),
+                    job.candidate_id,
+                    job.status.value,
+                    job.requested_at.isoformat(),
+                    job.model_dump_json(),
+                ),
+            )
+        return job
+
+    def update_research_job(self, job: ResearchJob) -> ResearchJob:
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT payload FROM research_jobs WHERE job_id = ?",
+                (str(job.job_id),),
+            ).fetchone()
+            if row is None:
+                raise KeyError(str(job.job_id))
+            previous = ResearchJob.model_validate_json(row["payload"])
+            if (
+                previous.candidate_id != job.candidate_id
+                or previous.thesis_id != job.thesis_id
+                or previous.instrument_id != job.instrument_id
+                or previous.trade_date != job.trade_date
+                or previous.requested_at != job.requested_at
+            ):
+                raise ValueError("research job identity is immutable")
+            if previous.status in {
+                ResearchJobStatus.SUCCEEDED,
+                ResearchJobStatus.FAILED,
+                ResearchJobStatus.TIMED_OUT,
+            }:
+                raise ValueError("terminal research job cannot be updated")
+            connection.execute(
+                "UPDATE research_jobs SET status = ?, payload = ? WHERE job_id = ?",
+                (job.status.value, job.model_dump_json(), str(job.job_id)),
+            )
+        return job
+
+    def get_research_job(self, job_id: str) -> ResearchJob:
+        row = self._connection.execute(
+            "SELECT payload FROM research_jobs WHERE job_id = ?",
+            (str(job_id),),
+        ).fetchone()
+        if row is None:
+            raise KeyError(str(job_id))
+        return ResearchJob.model_validate_json(row["payload"])
+
+    def latest_research_job(self, candidate_id: str) -> ResearchJob | None:
+        row = self._connection.execute(
+            """
+            SELECT payload FROM research_jobs
+            WHERE candidate_id = ? ORDER BY requested_at DESC, rowid DESC LIMIT 1
+            """,
+            (candidate_id,),
+        ).fetchone()
+        return ResearchJob.model_validate_json(row["payload"]) if row else None
+
+    def active_research_job(self) -> ResearchJob | None:
+        row = self._connection.execute(
+            """
+            SELECT payload FROM research_jobs
+            WHERE status IN (?, ?)
+            ORDER BY requested_at DESC, rowid DESC LIMIT 1
+            """,
+            (ResearchJobStatus.QUEUED.value, ResearchJobStatus.RUNNING.value),
+        ).fetchone()
+        return ResearchJob.model_validate_json(row["payload"]) if row else None
 
     def create_scan_run(self, scan_run: ScanRun) -> ScanRun:
         if scan_run.status is not ScanRunStatus.RUNNING:

@@ -29,6 +29,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Kyrie\Document
 3. 保留文件中已有的其他 `mcpServers`，将下面的 `ashare-thesis-workbench` 合并进去。
 4. 保存后重新启动 Claude Desktop。
 
+Microsoft Store 版可能把 `%APPDATA%` 虚拟化。当前机器实际使用的配置路径是：
+
+```text
+C:\Users\Kyrie\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json
+```
+
+如果标准路径不存在，应先查找现有 `claude_desktop_config.json`，确认活跃配置后再合并；不得同时新建多个互相竞争的配置文件。当前机器对应日志目录也在同一虚拟化根目录的 `logs` 子目录中。
+
 ```json
 {
   "mcpServers": {
@@ -63,8 +71,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Kyrie\Document
 1. get_market_snapshot；
 2. get_stock_observation；
 3. 有板块证据时调用 get_sector_observations 和 get_fund_flow_observations；
-4. 需要价格行为时按需调用 get_price_volume_context；
-5. 只使用工具返回的 observation_ref_id 和 source_refs 形成完整 ThesisRevision。
+4. 调用 get_catalyst_context 读取涨停池原始 reason；MISSING 时不得推测；
+5. 需要价格行为时按需调用 get_price_volume_context；
+6. 只使用工具返回的 observation_ref_id 和 source_refs 形成完整 ThesisRevision。
 
 请创建一个新的 UUID 同时作为 submit_thesis_proposal 的 thesis_id 和 proposal.thesis_id。
 proposal 必须引用 get_market_snapshot 返回的 snapshot_id，version=1，
@@ -91,6 +100,7 @@ revision_type=agent_proposal，accepted=false，derived_from_revision_id=null。
 - `get_stock_observation`
 - `get_sector_observations`
 - `get_fund_flow_observations`
+- `get_catalyst_context`
 - `get_price_volume_context`（M3a，按需访问公开行情）
 - `submit_thesis_proposal`
 

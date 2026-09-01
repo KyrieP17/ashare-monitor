@@ -105,6 +105,7 @@ def test_mcp_read_tools_match_direct_typed_tool_calls(tmp_path):
 
     market = service.get_market_snapshot(DAY.isoformat(), [card.instrument_id])
     stock = service.get_stock_observation(card.instrument_id, DAY.isoformat())
+    catalyst = service.get_catalyst_context(card.instrument_id, DAY.isoformat())
     sectors = service.get_sector_observations(card.instrument_id, DAY.isoformat())
     flows = service.get_fund_flow_observations(
         DAY.isoformat(),
@@ -120,6 +121,10 @@ def test_mcp_read_tools_match_direct_typed_tool_calls(tmp_path):
         )
         assert market == direct.get_market_snapshot(DAY, [card.instrument_id]).model_dump(mode="json")
         assert stock == direct.get_stock_observation(card.instrument_id, DAY).model_dump(mode="json")
+        direct_catalyst = direct.get_catalyst_context(card.instrument_id, DAY).model_dump(mode="json")
+        assert catalyst["tool_call_id"].startswith("claude-mcp:")
+        catalyst_without_call_id = {**catalyst, "tool_call_id": None}
+        assert catalyst_without_call_id == direct_catalyst
         assert sectors == [
             item.model_dump(mode="json")
             for item in direct.get_sector_observations(card.instrument_id, DAY)
@@ -218,6 +223,34 @@ def test_valid_mcp_submission_creates_unaccepted_claude_thesis_and_reopens(tmp_p
         assert accepted is not None and accepted.accepted is True
 
 
+def test_valid_submission_from_claude_code_has_distinct_generator_kind(tmp_path):
+    database = tmp_path / "claude-code.sqlite"
+    card = seed(database)
+    service = MCPResearchService(database)
+    snapshot_payload = service.get_market_snapshot(DAY.isoformat(), [card.instrument_id])
+    with SQLiteThesisRepository(database) as repository:
+        snapshot = repository.get_snapshot(snapshot_payload["snapshot_id"])
+    thesis_id = uuid4()
+    proposal = proposal_for(snapshot, thesis_id)
+
+    result = service.submit_thesis_proposal(
+        card.instrument_id,
+        DAY.isoformat(),
+        str(thesis_id),
+        proposal,
+        "claude-sonnet-test",
+        "claude-code",
+    )
+
+    assert result["ok"] is True
+    assert result["generator_kind"] == "claude-code:claude-sonnet-test"
+    with SQLiteThesisRepository(database) as repository:
+        pending = repository.list_pending_proposals(thesis_id)
+        review = repository.get_proposal_review(pending[0].revision_id)
+        assert review.generator_kind == "claude-code:claude-sonnet-test"
+        assert review.graph_trace[0] == "claude_code"
+
+
 def test_mcp_schema_is_native_and_tools_are_distinctly_exposed(tmp_path):
     server = create_mcp_server(MCPResearchService(tmp_path / "schema.sqlite"))
     tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
@@ -225,6 +258,7 @@ def test_mcp_schema_is_native_and_tools_are_distinctly_exposed(tmp_path):
     assert set(tools) == {
         "get_market_snapshot",
         "get_stock_observation",
+        "get_catalyst_context",
         "get_sector_observations",
         "get_fund_flow_observations",
         "get_price_volume_context",
@@ -248,3 +282,5 @@ def test_thesis_page_labels_claude_mcp_as_manual_interactive_path():
     assert 'generator_kind.startswith("claude-mcp:")' in source
     assert "Claude Desktop + MCP · 交互式研究" in source
     assert "不会由 PROMOTE 自动触发" in source
+    assert 'generator_kind.startswith("claude-code:")' in source
+    assert "AShare Monitor + Claude Code · 外接深研" in source

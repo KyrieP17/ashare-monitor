@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Protocol
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import Field, model_validator
 
@@ -30,6 +30,14 @@ class ScanRunStatus(StrEnum):
 class ScanMode(StrEnum):
     ONCE = "once"
     LOOP = "loop"
+
+
+class ResearchJobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
 
 
 class ScanSourceStatus(DomainModel):
@@ -69,6 +77,64 @@ class ScanRun(DomainModel):
             raise ValueError("RUNNING scan must not have completed_at")
         if self.completed_at is not None and self.completed_at < self.started_at:
             raise ValueError("completed_at cannot precede started_at")
+        return self
+
+
+class ResearchJob(DomainModel):
+    job_id: UUID
+    candidate_id: str = Field(min_length=1)
+    thesis_id: UUID
+    instrument_id: str = Field(pattern=r"^CN\.(SH|SZ|BJ)\.\d{6}$")
+    trade_date: date
+    status: ResearchJobStatus
+    requested_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    worker_pid: int | None = Field(default=None, ge=1)
+    error_type: str | None = None
+    cli_version: str | None = None
+    executable_kind: str | None = None
+    return_code: int | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+    failure_category: str | None = None
+    worker_started_at: datetime | None = None
+    worker_finished_at: datetime | None = None
+    status_message: str | None = None
+
+    @model_validator(mode="after")
+    def validate_research_job(self) -> ResearchJob:
+        for field_name in (
+            "requested_at",
+            "started_at",
+            "completed_at",
+            "worker_started_at",
+            "worker_finished_at",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and value.utcoffset() is None:
+                raise ValueError(f"{field_name} must include timezone")
+        if self.started_at is not None and self.started_at < self.requested_at:
+            raise ValueError("started_at cannot precede requested_at")
+        if self.completed_at is not None:
+            boundary = self.started_at or self.requested_at
+            if self.completed_at < boundary:
+                raise ValueError("completed_at cannot precede the job start")
+        terminal = {
+            ResearchJobStatus.SUCCEEDED,
+            ResearchJobStatus.FAILED,
+            ResearchJobStatus.TIMED_OUT,
+        }
+        if self.status in terminal and self.completed_at is None:
+            raise ValueError("terminal research jobs require completed_at")
+        if self.status not in terminal and self.completed_at is not None:
+            raise ValueError("non-terminal research jobs cannot have completed_at")
+        if self.worker_finished_at is not None and self.worker_started_at is None:
+            raise ValueError("worker_finished_at requires worker_started_at")
+        if (
+            self.worker_finished_at is not None
+            and self.worker_finished_at < self.worker_started_at
+        ):
+            raise ValueError("worker_finished_at cannot precede worker_started_at")
         return self
 
 

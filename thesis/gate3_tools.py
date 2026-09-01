@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from typing import Any, TypeVar
 from .adapters import MarketDataAdapter
+from .catalyst import CatalystContext, catalyst_context_from_snapshot
 from .gate3_models import ToolInvocation, ToolInvocationStatus, ToolName
 from .models import (
     InstrumentRef,
@@ -254,6 +255,38 @@ class ReadOnlyMarketTools:
                 "trade_date": trade_date.isoformat(),
                 "instrument_id": instrument_id,
                 "sector_name": sector_name,
+            },
+            operation=operation,
+            llm_tool_call_id=llm_tool_call_id,
+        )
+
+    def get_catalyst_context(
+        self,
+        instrument_id: str,
+        trade_date: date,
+        *,
+        llm_tool_call_id: str | None = None,
+    ) -> CatalystContext:
+        def operation() -> tuple[CatalystContext, MarketSnapshot, list[str], list[str]]:
+            instrument = self._instrument(instrument_id)
+            snapshot = self.adapter.get_market_snapshot(trade_date, [instrument])
+            context = catalyst_context_from_snapshot(
+                snapshot,
+                instrument.instrument_id,
+                tool_call_id=llm_tool_call_id,
+            )
+            return (
+                context,
+                snapshot,
+                context.observation_ref_ids,
+                [instrument.instrument_id],
+            )
+
+        return self._execute(
+            tool_name=ToolName.GET_CATALYST_CONTEXT,
+            arguments={
+                "instrument_id": instrument_id,
+                "trade_date": trade_date.isoformat(),
             },
             operation=operation,
             llm_tool_call_id=llm_tool_call_id,

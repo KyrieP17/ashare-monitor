@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
 
+from .catalyst import CATALYST_METRIC_KEY
 from .models import (
     ClaimType,
     DataStatus,
@@ -147,6 +148,7 @@ class DeterministicReplayProposalBuilder:
             None,
         )
         membership = None
+        catalyst = None
         if stock is not None:
             membership = next(
                 (
@@ -155,6 +157,17 @@ class DeterministicReplayProposalBuilder:
                     if metric.metric_key == "in_limit_up_pool"
                     and metric.status is DataStatus.AVAILABLE
                     and isinstance(metric.value, bool)
+                ),
+                None,
+            )
+            catalyst = next(
+                (
+                    metric
+                    for metric in stock.membership_metrics
+                    if metric.metric_key == CATALYST_METRIC_KEY
+                    and metric.status is DataStatus.AVAILABLE
+                    and isinstance(metric.value, str)
+                    and metric.value.strip()
                 ),
                 None,
             )
@@ -207,6 +220,33 @@ class DeterministicReplayProposalBuilder:
                 "Available data is insufficient to establish dated limit-up-pool membership; "
                 "no positive market fact is proposed."
             )
+
+        if catalyst is not None:
+            support.append(
+                EvidenceItem(
+                    evidence_id=uuid4(),
+                    claim=(
+                        "The dated limit-up data provider associated the stock with the raw reason text: "
+                        f"{catalyst.value}"
+                    ),
+                    claim_type=ClaimType.FACT,
+                    direction=EvidenceDirection.SUPPORT,
+                    evidence_quality=EvidenceQuality.MEDIUM,
+                    quality_reason=(
+                        "The text is copied from the provider's persisted reason field, but the underlying "
+                        "event has not been independently verified against an announcement."
+                    ),
+                    observation_ref_ids=[catalyst.observation_ref_id],
+                    source_refs=[catalyst.source],
+                    metric_refs=[f"stock:{instrument.instrument_id}:{CATALYST_METRIC_KEY}"],
+                    observed_at=catalyst.observed_at,
+                    known_limitations=[
+                        "Provider reason/theme text is not company-announcement evidence.",
+                        "This proposal records what the source associated with the stock, not that every tag is true.",
+                    ],
+                )
+            )
+            market_expectation += " Preserve the provider reason as an unverified catalyst hypothesis."
 
         return ThesisRevision(
             revision_id=uuid4(),

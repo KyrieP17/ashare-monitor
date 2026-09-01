@@ -21,10 +21,40 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 
 class OpenAIProviderError(RuntimeError):
+    status_category: str | None = None
+    retryable: bool = False
+    retry_after: str | None = None
+    request_id: str | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_category: str | None = None,
+        retryable: bool = False,
+        retry_after: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_category = status_category
+        self.retryable = retryable
+        self.retry_after = retry_after
+        self.request_id = request_id
+
+
+class OpenAIAuthenticationError(OpenAIProviderError):
     pass
 
 
-class OpenAICredentialsError(OpenAIProviderError):
+class OpenAICredentialsError(OpenAIAuthenticationError):
+    """Backward-compatible name for missing local credentials."""
+
+
+class OpenAIRateLimitError(OpenAIProviderError):
+    pass
+
+
+class OpenAIQuotaError(OpenAIRateLimitError):
     pass
 
 
@@ -76,11 +106,17 @@ class GetFundFlowObservationsArguments(ToolArgumentModel):
         return self
 
 
+class GetCatalystContextArguments(ToolArgumentModel):
+    instrument_id: str
+    trade_date: date
+
+
 _TOOL_ARGUMENT_MODELS: dict[ToolName, type[ToolArgumentModel]] = {
     ToolName.GET_MARKET_SNAPSHOT: GetMarketSnapshotArguments,
     ToolName.GET_STOCK_OBSERVATION: GetStockObservationArguments,
     ToolName.GET_SECTOR_OBSERVATIONS: GetSectorObservationsArguments,
     ToolName.GET_FUND_FLOW_OBSERVATIONS: GetFundFlowObservationsArguments,
+    ToolName.GET_CATALYST_CONTEXT: GetCatalystContextArguments,
 }
 
 
@@ -97,6 +133,10 @@ _TOOL_DESCRIPTIONS: dict[ToolName, str] = {
     ),
     ToolName.GET_FUND_FLOW_OBSERVATIONS: (
         "Return sourced fund-flow observations for the target stock or one named sector."
+    ),
+    ToolName.GET_CATALYST_CONTEXT: (
+        "Return the persisted limit-up-pool reason/theme text as a sourced catalyst hypothesis. "
+        "MISSING means no text was collected; never infer or invent a catalyst."
     ),
 }
 
@@ -182,20 +222,58 @@ class RequestsOpenAITransport:
             )
         except requests.Timeout as exc:
             raise OpenAIProviderTimeoutError(
-                f"OpenAI Responses API timed out after {timeout_seconds:g}s"
+                f"OpenAI provider timeout; retryable=yes; timeout={timeout_seconds:g}s",
+                status_category="timeout",
+                retryable=True,
             ) from exc
         except requests.RequestException as exc:
             raise OpenAIProviderError(f"OpenAI Responses API request failed: {type(exc).__name__}") from exc
 
         if response.status_code >= 400:
             request_id = response.headers.get("x-request-id")
-            suffix = f" (request_id={request_id})" if request_id else ""
+            retry_after = response.headers.get("Retry-After")
+            details = [f"HTTP {response.status_code}"]
+            if retry_after:
+                details.append(f"Retry-After={retry_after}")
+            if request_id:
+                details.append(f"request_id={request_id}")
             if response.status_code in (401, 403):
-                raise OpenAICredentialsError(
-                    f"OpenAI authentication/authorization failed with HTTP {response.status_code}{suffix}"
+                raise OpenAIAuthenticationError(
+                    f"OpenAI authentication failed; {'; '.join(details)}; retryable=no",
+                    status_category="authentication",
+                    retryable=False,
+                    request_id=request_id,
+                )
+            if response.status_code == 429:
+                error_code = None
+                try:
+                    error_body = response.json()
+                    if isinstance(error_body, dict) and isinstance(error_body.get("error"), dict):
+                        value = error_body["error"].get("code")
+                        error_code = value if isinstance(value, str) else None
+                except ValueError:
+                    pass
+                error_class = (
+                    OpenAIQuotaError
+                    if error_code in {"insufficient_quota", "billing_hard_limit_reached"}
+                    else OpenAIRateLimitError
+                )
+                category = "quota" if error_class is OpenAIQuotaError else "rate_limit"
+                raise error_class(
+                    f"OpenAI {category}; {'; '.join(details)}; retryable="
+                    f"{'no' if category == 'quota' else 'yes'}",
+                    status_category=category,
+                    retryable=category != "quota",
+                    retry_after=retry_after,
+                    request_id=request_id,
                 )
             raise OpenAIProviderError(
-                f"OpenAI Responses API failed with HTTP {response.status_code}{suffix}"
+                f"OpenAI provider error; {'; '.join(details)}; retryable="
+                f"{'yes' if response.status_code >= 500 else 'no'}",
+                status_category=f"http_{response.status_code // 100}xx",
+                retryable=response.status_code >= 500,
+                retry_after=retry_after,
+                request_id=request_id,
             )
         try:
             body = response.json()
@@ -434,11 +512,18 @@ class OpenAIProviderAdapter:
                 arguments.trade_date,
                 llm_tool_call_id=call_id,
             )
-        assert isinstance(arguments, GetFundFlowObservationsArguments)
-        return self.tools.get_fund_flow_observations(
+        if tool_name is ToolName.GET_FUND_FLOW_OBSERVATIONS:
+            assert isinstance(arguments, GetFundFlowObservationsArguments)
+            return self.tools.get_fund_flow_observations(
+                arguments.trade_date,
+                instrument_id=arguments.instrument_id,
+                sector_name=arguments.sector_name,
+                llm_tool_call_id=call_id,
+            )
+        assert isinstance(arguments, GetCatalystContextArguments)
+        return self.tools.get_catalyst_context(
+            arguments.instrument_id,
             arguments.trade_date,
-            instrument_id=arguments.instrument_id,
-            sector_name=arguments.sector_name,
             llm_tool_call_id=call_id,
         )
 
@@ -465,7 +550,11 @@ class OpenAIProviderAdapter:
         by_name = {item.tool_name: item for item in successful}
         missing = [
             name.value
-            for name in (ToolName.GET_MARKET_SNAPSHOT, ToolName.GET_STOCK_OBSERVATION)
+            for name in (
+                ToolName.GET_MARKET_SNAPSHOT,
+                ToolName.GET_STOCK_OBSERVATION,
+                ToolName.GET_CATALYST_CONTEXT,
+            )
             if name not in by_name
         ]
         if missing:
@@ -474,9 +563,11 @@ class OpenAIProviderAdapter:
             )
         market = by_name[ToolName.GET_MARKET_SNAPSHOT]
         stock = by_name[ToolName.GET_STOCK_OBSERVATION]
-        if market.snapshot_id != stock.snapshot_id or market.snapshot_id is None:
+        catalyst = by_name[ToolName.GET_CATALYST_CONTEXT]
+        snapshot_ids = {market.snapshot_id, stock.snapshot_id, catalyst.snapshot_id}
+        if len(snapshot_ids) != 1 or market.snapshot_id is None:
             raise OpenAIRequiredEvidenceError(
-                "market and stock tools did not resolve to the same persisted snapshot"
+                "market, stock, and catalyst tools did not resolve to the same persisted snapshot"
             )
         return self.tools.repository.get_snapshot(market.snapshot_id)
 
@@ -505,12 +596,18 @@ class OpenAIProviderAdapter:
         }
         return (
             "You are a constrained A-share research generator. Use only the supplied structured tools; "
-            "never invent observations or inspect raw fixture JSON. In the first tool round call both "
-            "get_market_snapshot and get_stock_observation for the exact target. Sector and fund-flow "
+            "never invent observations or inspect raw fixture JSON. In the first tool round call "
+            "get_market_snapshot, get_stock_observation, and get_catalyst_context for the exact target. "
+            "A MISSING catalyst must remain missing. Sector and fund-flow "
             "tools are optional when they materially improve evidence. Every numeric factual claim must "
             "cite matching observation_ref_ids and source_refs from tool results. Unsupported content must "
-            "be labeled inference, assumption, or insufficient evidence. Produce one complete ThesisRevision "
-            "with revision_type=agent_proposal, accepted=false, proposed_lifecycle_status=null, and a fresh "
+            "be labeled inference, assumption, or insufficient evidence. "
+            "Apply a bounded hot-money sentiment and counterparty lens when evidence permits: distinguish "
+            "the stock's observable short-horizon role, market-regime fit, chip-exchange implications, and "
+            "Price In risk. Never infer hidden actor intent, prescribe position size or entry price, or emit "
+            "a buy, sell, hold, or order instruction. "
+            "Produce one complete ThesisRevision with revision_type=agent_proposal, accepted=false, "
+            "proposed_lifecycle_status=null, and a fresh "
             "revision_id. Use the snapshot_id returned by the required tools as based_on_snapshot_id. "
             "Do not alter lifecycle state or accepted pointers. Exact request identity: "
             + json.dumps(identity, ensure_ascii=False, separators=(",", ":"))

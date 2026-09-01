@@ -9,6 +9,7 @@ from typing import Any, Iterable, Sequence
 from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
+from .catalyst import CATALYST_METRIC_KEY
 from .models import (
     DataStatus,
     InstrumentRef,
@@ -474,6 +475,81 @@ class ExistingJsonAdapter:
                 observed_at=observed_at,
             )
         )
+
+        raw_reason = (
+            str(raw_stock.get("reason_type") or "").strip()
+            if raw_stock is not None
+            else ""
+        )
+        normalized_reason = (
+            str(normalized_stock.get("reason") or "").strip()
+            if normalized_stock is not None
+            else ""
+        )
+        catalyst_conflicted = bool(
+            raw_reason and normalized_reason and raw_reason != normalized_reason
+        )
+        if raw_reason:
+            catalyst_source = self._source(
+                dataset=f"data/{pool_name}",
+                provider="Tonghuashun limit-up pool cache",
+                trade_date=trade_date,
+                retrieved_at=retrieved_at,
+                definition="Original provider reason_type text from the dated limit-up pool.",
+                limitations=["Provider event/theme text is not an announcement or independently verified fact."],
+            )
+            membership_metrics.append(
+                self._metric(
+                    metric_key=CATALYST_METRIC_KEY,
+                    value=raw_reason,
+                    unit=None,
+                    status=DataStatus.CONFLICTED if catalyst_conflicted else DataStatus.AVAILABLE,
+                    source=catalyst_source,
+                    trade_date=trade_date,
+                    scope=instrument.instrument_id,
+                    raw_reference=f"data.info[code={instrument.code}].reason_type",
+                    observed_at=observed_at,
+                )
+            )
+        if normalized_reason and (not raw_reason or catalyst_conflicted):
+            catalyst_source = self._source(
+                dataset="data/limit_up.json",
+                provider="AShare Monitor normalized limit-up output",
+                trade_date=trade_date,
+                retrieved_at=retrieved_at,
+                definition="Original normalized reason text retained from the legacy limit-up artifact.",
+                limitations=["Normalized reason text is not an announcement or independently verified fact."],
+            )
+            membership_metrics.append(
+                self._metric(
+                    metric_key=CATALYST_METRIC_KEY,
+                    value=normalized_reason,
+                    unit=None,
+                    status=DataStatus.CONFLICTED if catalyst_conflicted else DataStatus.AVAILABLE,
+                    source=catalyst_source,
+                    trade_date=trade_date,
+                    scope=instrument.instrument_id,
+                    raw_reference=f"limit_pool[code={instrument.code}].reason",
+                    observed_at=observed_at,
+                )
+            )
+        if not raw_reason and not normalized_reason:
+            membership_metrics.append(
+                self._metric(
+                    metric_key=CATALYST_METRIC_KEY,
+                    value=None,
+                    unit=None,
+                    status=DataStatus.MISSING,
+                    source=membership_source,
+                    trade_date=trade_date,
+                    scope=instrument.instrument_id,
+                    raw_reference=(
+                        f"catalyst_lookup[trade_date={trade_date.isoformat()};"
+                        f"query_code={instrument.code}]"
+                    ),
+                    observed_at=observed_at,
+                )
+            )
 
         if latest_quote is not None:
             name = name or latest_quote.get("name")

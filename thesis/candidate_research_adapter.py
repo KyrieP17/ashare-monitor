@@ -5,6 +5,7 @@ from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
 from .candidates import CandidateCard, CandidateObservation
+from .catalyst import CATALYST_METRIC_KEY
 from .models import (
     DataStatus,
     InstrumentRef,
@@ -77,6 +78,17 @@ class CandidateResearchAdapter:
                         unit=None,
                     )
                 )
+                reason = observation.reason.strip()
+                membership.append(
+                    self._metric(
+                        observation,
+                        source,
+                        CATALYST_METRIC_KEY,
+                        reason or None,
+                        unit=None,
+                        raw_reference=f"{observation.raw_reference}.reason_type",
+                    )
+                )
             for key, value in observation.metrics.items():
                 metric = self._metric(
                     observation,
@@ -125,6 +137,47 @@ class CandidateResearchAdapter:
                     )
                 )
 
+        if not any(item.metric_key == CATALYST_METRIC_KEY for item in membership):
+            if self.candidate.observations:
+                fallback_observation = self.candidate.observations[0]
+                fallback_source = self._source(fallback_observation)
+            else:
+                fallback_source = SourceRef(
+                    source_id=f"candidate-card:{self.candidate.candidate_id}",
+                    provider="candidate_repository",
+                    endpoint_or_dataset="CandidateCard",
+                    retrieved_at=self.candidate.last_seen_at,
+                    data_as_of=self.candidate.data_as_of,
+                    definition="Persisted candidate without a limit-up reason/theme observation.",
+                    known_limitations=["No catalyst text is present in the persisted candidate."],
+                )
+                fallback_observation = CandidateObservation(
+                    instrument_id=self.candidate.instrument_id,
+                    instrument_name=self.candidate.instrument_name,
+                    source="candidate_repository",
+                    data_as_of=self.candidate.data_as_of,
+                    retrieved_at=self.candidate.last_seen_at,
+                    status=DataStatus.MISSING,
+                    coverage="candidate_card_only",
+                    observation_ref_id=f"candidate:{self.candidate.candidate_id}:catalyst-missing",
+                    raw_reference=f"candidate_card[{self.candidate.candidate_id}]",
+                    source_snapshot_id=f"candidate-card:{self.candidate.candidate_id}",
+                )
+            sources[fallback_source.source_id] = fallback_source
+            membership.append(
+                self._metric(
+                    fallback_observation,
+                    fallback_source,
+                    CATALYST_METRIC_KEY,
+                    None,
+                    unit=None,
+                    raw_reference=(
+                        f"catalyst_lookup[trade_date={self.candidate.trade_date.isoformat()};"
+                        f"instrument_id={self.candidate.instrument_id}]"
+                    ),
+                )
+            )
+
         raw = self.candidate.model_dump_json().encode("utf-8")
         digest = hashlib.sha256(raw).hexdigest()
         snapshot_id = uuid5(
@@ -141,7 +194,7 @@ class CandidateResearchAdapter:
             sectors=sectors,
             known_limitations=[
                 "Research input is limited to persisted public CandidateCard observations.",
-                "No announcement/catalyst tool or private account data is included in M5.",
+                "Catalyst context is limited to the provider's persisted reason/theme text; no announcement verification or private account data is included.",
             ],
         )
         return MarketSnapshot(
@@ -178,8 +231,10 @@ class CandidateResearchAdapter:
         *,
         unit: str | None,
         scope: str | None = None,
+        raw_reference: str | None = None,
     ) -> MetricObservation:
         normalized = Decimal(str(value)) if isinstance(value, float) else value
+        resolved_reference = raw_reference or observation.raw_reference
         return MetricObservation(
             metric_key=key,
             value=normalized,
@@ -191,10 +246,10 @@ class CandidateResearchAdapter:
                 trade_date=observation.data_as_of.date(),
                 scope=scope or observation.instrument_id,
                 metric_key=key,
-                raw_reference=observation.raw_reference,
+                raw_reference=resolved_reference,
             ),
             observed_at=observation.data_as_of,
-            raw_reference=observation.raw_reference,
+            raw_reference=resolved_reference,
         )
 
 

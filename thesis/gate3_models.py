@@ -28,6 +28,7 @@ class ToolName(StrEnum):
     GET_STOCK_OBSERVATION = "get_stock_observation"
     GET_SECTOR_OBSERVATIONS = "get_sector_observations"
     GET_FUND_FLOW_OBSERVATIONS = "get_fund_flow_observations"
+    GET_CATALYST_CONTEXT = "get_catalyst_context"
 
 
 class ToolInvocationStatus(StrEnum):

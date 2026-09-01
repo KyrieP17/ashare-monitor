@@ -66,7 +66,44 @@ def test_candidate_ui_has_two_regions_localized_actions_and_missing_values():
     assert '"保留关注"' in source
     assert '"忽略"' in source
     assert '"转入研究"' in source
+    assert '"Claude 深研"' in source
+    assert "ClaudeResearchJobService" in source
+    assert "Claude Code 当前正在研究" in source
     assert '"查看价格行为"' in source
     assert '"数据不足"' in source
     assert "removeprefix(prefix)" in source
     assert "st.columns(2" in source
+
+
+def test_launcher_is_loopback_fixed_port_and_never_kills_python():
+    source = (ROOT / "scripts" / "start_local_app.ps1").read_text(encoding="utf-8")
+    assert '"127.0.0.1"' in source
+    assert "$port = 8501" in source
+    assert "Get-NetTCPConnection" in source
+    assert "PYTHONNOUSERSITE" in source
+    assert "sys.executable" in source
+    assert "Stop-Process" not in source
+    assert "taskkill" not in source.lower()
+    assert "8502" not in source
+
+
+def test_candidate_count_copy_distinguishes_run_and_database_totals():
+    status = (ROOT / "thesis" / "scan_status_ui.py").read_text(encoding="utf-8")
+    candidate_page = (ROOT / "pages" / "6_candidates.py").read_text(encoding="utf-8")
+    assert 'metric("本轮生成候选"' in status
+    assert "当日数据库累计候选" in candidate_page
+    assert "数据库累计候选" in candidate_page
+
+
+def test_r1_candidate_page_renders_locally_without_live_providers(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("THESIS_DB_PATH", str(tmp_path / "page.sqlite"))
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key-must-not-route")
+    monkeypatch.delenv("ENABLE_OPENAI_LIVE", raising=False)
+    app = AppTest.from_file(str(ROOT / "pages" / "6_candidates.py"))
+    app.run(timeout=10)
+    assert not app.exception
+    assert app.title[0].value == "CandidateCard 候选工作台"
+    assert any("尚无候选数据" in item.value for item in app.warning)
+    assert not any("OpenAI 深研（可能产生 API 费用）" in item.label for item in app.button)
